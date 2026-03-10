@@ -1,11 +1,11 @@
 # Portfolio — Client API
 
-TypeScript methods from `@investwithtaji/rh-client` for programmatic portfolio access.
+TypeScript methods from `@investwithtaji/client` for programmatic portfolio access.
 
 ## Quick Start
 
 ```typescript
-import { RobinhoodClient } from "@investwithtaji/rh-client";
+import { RobinhoodClient } from "@investwithtaji/client";
 
 const client = new RobinhoodClient();
 await client.restoreSession();

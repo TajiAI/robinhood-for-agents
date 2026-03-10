@@ -1,8 +1,8 @@
 /**
- * @investwithtaji/rh-client — TypeScript Robinhood API client.
+ * @investwithtaji/client — TypeScript Robinhood API client.
  *
  * Usage:
- *   import { RobinhoodClient } from "@investwithtaji/rh-client";
+ *   import { RobinhoodClient } from "@investwithtaji/client";
  *
  *   const client = new RobinhoodClient();
  *   await client.restoreSession();
@@ -10,7 +10,7 @@
  *
  * Or use the module-level singleton:
  *
- *   import { getClient } from "@investwithtaji/rh-client";
+ *   import { getClient } from "@investwithtaji/client";
  *
  *   const rh = getClient();
  *   await rh.restoreSession();

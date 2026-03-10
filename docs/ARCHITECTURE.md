@@ -20,7 +20,7 @@
 │          ▼                            ▼                         │
 │   ┌───────────────────────────────────────────┐                 │
 │   │      packages/client/src/                 │                 │
-│   │      @investwithtaji/rh-client               │                 │
+│   │      @investwithtaji/client               │                 │
 │   │  ┌─────────────────────────────────────┐  │                 │
 │   │  │  session: RobinhoodSession (fetch)  │  │                 │
 │   │  │  loggedIn: boolean                  │  │                 │
@@ -56,7 +56,7 @@
 ## File Map
 
 ```
-packages/client/src/          <- @investwithtaji/rh-client
+packages/client/src/          <- @investwithtaji/client
 ├── index.ts                  <- Exports: RobinhoodClient, getClient(), login()
 ├── client.ts                 <- RobinhoodClient class (~50 async methods)
 ├── auth.ts                   <- Session restore + token refresh

@@ -2,8 +2,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { describe, expect, it, vi } from "vitest";
 import { createServer } from "../src/server.js";
 
-// Mock @investwithtaji/rh-client so tools don't need real auth
-vi.mock("@investwithtaji/rh-client", () => {
+// Mock @investwithtaji/client so tools don't need real auth
+vi.mock("@investwithtaji/client", () => {
   const mockClient = {
     restoreSession: vi.fn().mockResolvedValue({ status: "logged_in", method: "cached" }),
     isLoggedIn: true,
@@ -300,7 +300,7 @@ describe("Tool handlers return MCP content format", () => {
 
 describe("Tool error handling", () => {
   it("returns isError when client method throws", async () => {
-    const { getClient } = await import("@investwithtaji/rh-client");
+    const { getClient } = await import("@investwithtaji/client");
     const rh = getClient();
     (rh.getQuotes as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("API failure"));
 
@@ -319,7 +319,7 @@ describe("Tool error handling", () => {
   });
 
   it("returns isError when order placement throws", async () => {
-    const { getClient } = await import("@investwithtaji/rh-client");
+    const { getClient } = await import("@investwithtaji/client");
     const rh = getClient();
     (rh.orderStock as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
       new Error("Insufficient funds"),
