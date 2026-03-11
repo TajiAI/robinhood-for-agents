@@ -49,9 +49,8 @@
 | **Zod v3.24** | Runtime validation of API responses + MCP tool parameter schemas |
 | **Vitest** | Fast TS-native testing, correct module isolation via `vi.mock()` |
 | **Biome v2** | All-in-one lint + format, 10-25x faster than ESLint |
-| **AES-256-GCM** | Modern authenticated encryption for token storage |
+| **Bun.secrets** | OS keychain access (macOS Keychain Services, Linux libsecret) |
 | **playwright-core** | Browser auth via system Chrome, no bundled browser (~1MB) |
-| **keytar** | OS keychain access (optional dependency, dynamic import) |
 
 ## File Map
 
@@ -60,7 +59,7 @@ src/client/                    <- rh-for-agents client library
 ├── index.ts                   <- Exports: RobinhoodClient, getClient(), login()
 ├── client.ts                  <- RobinhoodClient class (~50 async methods)
 ├── auth.ts                    <- Session restore + token refresh
-├── token-store.ts             <- AES-256-GCM encrypted JSON + OS keychain key
+├── token-store.ts             <- Token storage via OS keychain (Bun.secrets)
 ├── session.ts                 <- fetch wrapper (headers, timeouts, auth)
 ├── http.ts                    <- GET/POST/DELETE with pagination + error mapping
 ├── urls.ts                    <- Pure URL builders (api.robinhood.com, nummus.robinhood.com)
@@ -101,10 +100,10 @@ src/server/                    <- rh-for-agents MCP server
 │          │                                    │                         │
 │          ▼                                    ▼                         │
 │  ┌───────────────────┐               loadTokens()                      │
-│  │ Playwright launches│               ~/.rh-for-agents/session.enc     │
-│  │ system Chrome      │                       │                         │
-│  │ (headless: false)  │               AES-256-GCM decrypt              │
-│  └────────┬──────────┘               (key from OS keychain)            │
+│  │ Playwright launches│               Bun.secrets.get() from           │
+│  │ system Chrome      │               OS keychain                      │
+│  │ (headless: false)  │               (macOS Keychain Services)        │
+│  └────────┬──────────┘                        │                        │
 │           │                                   │                         │
 │           ▼                                   ▼                         │
 │  ┌───────────────────┐               Set Authorization header          │
@@ -132,9 +131,9 @@ src/server/                    <- rh-for-agents MCP server
 │           │                                                             │
 │           ▼                                                             │
 │  saveTokens() ──► token-store.ts                                       │
-│           │       AES-256-GCM encrypt                                  │
-│           │       Write ~/.rh-for-agents/session.enc                   │
-│           │       Key → OS Keychain (never on disk)                    │
+│           │       Bun.secrets.set() → OS keychain                      │
+│           │       (tokens never written to disk)                       │
+│           │                                                            │
 │           │                                                             │
 │           ▼                                                             │
 │  restoreSession() ──► client ready                                     │
@@ -160,65 +159,42 @@ This design is resilient to Robinhood UI changes — it doesn't depend on any DO
 ```
 ┌─ token-store.ts ──────────────────────────────────────────────────┐
 │                                                                    │
-│  SAVE (encrypt)                                                    │
-│  ─────────────                                                     │
+│  SAVE                                                              │
+│  ────                                                              │
 │  TokenData (JSON):                                                 │
 │  {access_token, refresh_token, token_type, device_token, saved_at} │
 │         │                                                          │
 │         ▼                                                          │
-│  JSON.stringify() → Buffer                                         │
+│  JSON.stringify()                                                  │
 │         │                                                          │
 │         ▼                                                          │
-│  getOrCreateKey()                                                  │
-│  ├── keytar.getPassword("rh-for-agents", "encryption-key")        │
-│  ├── If no key exists: randomBytes(32), store in keychain          │
-│  └── Returns 32-byte Buffer                                       │
-│         │                                                          │
-│         ▼                                                          │
-│  AES-256-GCM encrypt:                                              │
-│  ├── iv = randomBytes(12)          ← unique per save               │
-│  ├── cipher = createCipheriv("aes-256-gcm", key, iv)              │
-│  ├── encrypted = cipher.update(plaintext) + cipher.final()        │
-│  └── tag = cipher.getAuthTag()     ← 16-byte integrity check      │
-│         │                                                          │
-│         ▼                                                          │
-│  Write to ~/.rh-for-agents/session.enc (chmod 0o600)              │
-│  Binary format: [iv (12 bytes)] [tag (16 bytes)] [ciphertext]     │
+│  Bun.secrets.set("rh-for-agents", "session-tokens", json)         │
+│  → OS encrypts and stores in keychain                              │
+│  → No file written to disk                                         │
 │                                                                    │
 │                                                                    │
-│  LOAD (decrypt)                                                    │
-│  ─────────────                                                     │
-│  Read ~/.rh-for-agents/session.enc → raw Buffer                   │
-│         │                                                          │
-│         ▼                                                          │
-│  Split binary: iv = raw[0:12], tag = raw[12:28], ct = raw[28:]    │
-│         │                                                          │
-│         ▼                                                          │
-│  getOrCreateKey() → retrieve 32-byte key from OS keychain          │
-│         │                                                          │
-│         ▼                                                          │
-│  AES-256-GCM decrypt:                                              │
-│  ├── decipher = createDecipheriv("aes-256-gcm", key, iv)          │
-│  ├── decipher.setAuthTag(tag)      ← verifies integrity            │
-│  └── plaintext = decipher.update(ct) + decipher.final()           │
+│  LOAD                                                              │
+│  ────                                                              │
+│  Bun.secrets.get("rh-for-agents", "session-tokens")               │
 │         │                                                          │
 │         ▼                                                          │
 │  JSON.parse() → TokenData                                          │
 │                                                                    │
 │                                                                    │
-│  KEY MANAGEMENT                                                    │
-│  ──────────────                                                    │
-│  Key: OS Keychain (via keytar, dynamic import)                     │
-│  ├── service: "rh-for-agents"                                     │
-│  └── username: "encryption-key"                                    │
-│  Generated once via randomBytes(32). Never on filesystem.          │
+│  STORAGE                                                           │
+│  ───────                                                           │
+│  Primary: OS Keychain via Bun.secrets                              │
+│  ├── macOS: Keychain Services                                      │
+│  ├── Linux: libsecret (GNOME Keyring, KWallet)                    │
+│  └── Windows: Credential Manager                                   │
+│  Tokens never touch the filesystem.                                │
 │                                                                    │
-│  Fallback: plaintext JSON if keytar unavailable                    │
-│  (CI environments, minimal installs)                               │
+│  Fallback: plaintext JSON (~/.rh-for-agents/session.json)          │
+│  (CI environments, minimal installs without keychain)              │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
-`keytar` is an optional dependency (dynamic import). Without it, tokens are stored as plaintext JSON with a console warning. The auth tag ensures tampered ciphertext is rejected on decrypt — if someone modifies `session.enc`, `decipher.final()` throws rather than returning garbage.
+`Bun.secrets` stores tokens directly in the OS keychain — no intermediate encryption layer needed since the keychain itself provides encryption, access control, and tamper resistance. When `Bun.secrets` is unavailable (CI, headless servers), tokens fall back to a plaintext JSON file with a console warning.
 
 ## HTTP Layer
 
@@ -372,9 +348,8 @@ Market buy orders include a 5% price collar (`preset_percent_limit: "0.05"`).
 |---|---|
 | **Bun + native fetch** | Zero deps for HTTP, native TS execution, fast startup |
 | **Class-based over module globals** | Instance-scoped session prevents shared mutable state. Testable. |
-| **AES-256-GCM over Fernet** | Modern authenticated encryption via `node:crypto`. No external deps. |
-| **Keychain via keytar** | Key never touches disk. macOS Keychain is hardware-backed. |
-| **Optional keytar (dynamic import)** | Avoids blocking CI/test environments |
+| **Bun.secrets for token storage** | Tokens stored directly in OS keychain — no files on disk, no custom encryption layer. Zero deps. |
+| **Plaintext fallback** | Graceful degradation for CI/headless environments without a keychain service |
 | **No phoenix.robinhood.com** | TLS handshake fails. `api.robinhood.com` has equivalent data. |
 | **Unified order methods** | `orderStock()` with optional params vs 10 separate `orderBuyMarket()` etc. |
 | **Vitest over bun test** | Proper module isolation via worker processes. Critical for mocking. |

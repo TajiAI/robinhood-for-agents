@@ -1,29 +1,22 @@
 /**
- * Encrypted token storage using AES-256-GCM with OS keychain key management.
+ * Token storage using OS keychain via Bun.secrets.
  *
- * Tokens are stored as encrypted JSON at ~/.rh-for-agents/session.enc.
- * The encryption key is stored in the OS keychain via keytar,
- * so it never touches the filesystem.
+ * Tokens are stored as JSON directly in the OS keychain
+ * (macOS Keychain Services, Linux libsecret, Windows Credential Manager).
  *
- * Falls back to plaintext JSON with a warning if keytar/crypto
- * are unavailable (e.g. in CI or minimal environments).
+ * Falls back to plaintext JSON at ~/.rh-for-agents/session.json
+ * if Bun.secrets is unavailable (e.g. in CI or minimal environments).
  */
 
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { chmod } from "node:fs/promises";
+import { existsSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-const TOKEN_DIR = join(homedir(), ".rh-for-agents");
-const TOKEN_FILE = join(TOKEN_DIR, "session.enc");
 const KEYRING_SERVICE = "rh-for-agents";
-const KEYRING_USERNAME = "encryption-key";
+const KEYRING_NAME = "session-tokens";
 
-const ALGORITHM = "aes-256-gcm";
-const IV_LENGTH = 12;
-const TAG_LENGTH = 16;
-const KEY_LENGTH = 32;
+const TOKEN_DIR = join(homedir(), ".rh-for-agents");
+const FALLBACK_FILE = join(TOKEN_DIR, "session.json");
 
 export interface TokenData {
   access_token: string;
@@ -34,98 +27,81 @@ export interface TokenData {
   saved_at: number;
 }
 
-// Dynamic keytar import (optional dep)
-interface Keytar {
-  getPassword(service: string, account: string): Promise<string | null>;
-  setPassword(service: string, account: string, password: string): Promise<void>;
-}
-
-async function loadKeytar(): Promise<Keytar | null> {
+async function secretsAvailable(): Promise<boolean> {
   try {
-    return (await import("keytar")) as Keytar;
+    if (typeof Bun !== "undefined" && Bun.secrets) {
+      await Bun.secrets.get(KEYRING_SERVICE, KEYRING_NAME);
+      return true;
+    }
+    return false;
   } catch {
-    return null;
+    return false;
   }
 }
 
-async function getOrCreateKey(): Promise<Buffer | null> {
-  const keytar = await loadKeytar();
-  if (!keytar) return null;
-
-  const existing = await keytar.getPassword(KEYRING_SERVICE, KEYRING_USERNAME);
-  if (existing) {
-    return Buffer.from(existing, "hex");
-  }
-
-  const key = randomBytes(KEY_LENGTH);
-  await keytar.setPassword(KEYRING_SERVICE, KEYRING_USERNAME, key.toString("hex"));
-  return key;
-}
-
-function encrypt(data: Buffer, key: Buffer): Buffer {
-  const iv = randomBytes(IV_LENGTH);
-  const cipher = createCipheriv(ALGORITHM, key, iv);
-  const encrypted = Buffer.concat([cipher.update(data), cipher.final()]);
-  const tag = cipher.getAuthTag();
-  // Format: [iv (12)] [tag (16)] [ciphertext]
-  return Buffer.concat([iv, tag, encrypted]);
-}
-
-function decrypt(data: Buffer, key: Buffer): Buffer {
-  const iv = data.subarray(0, IV_LENGTH);
-  const tag = data.subarray(IV_LENGTH, IV_LENGTH + TAG_LENGTH);
-  const ciphertext = data.subarray(IV_LENGTH + TAG_LENGTH);
-  const decipher = createDecipheriv(ALGORITHM, key, iv);
-  decipher.setAuthTag(tag);
-  return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+function isTokenData(data: unknown): data is TokenData {
+  if (typeof data !== "object" || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return (
+    typeof obj.access_token === "string" &&
+    typeof obj.refresh_token === "string" &&
+    typeof obj.token_type === "string" &&
+    typeof obj.device_token === "string" &&
+    typeof obj.saved_at === "number"
+  );
 }
 
 export async function saveTokens(tokens: Omit<TokenData, "saved_at">): Promise<string> {
   const data: TokenData = { ...tokens, saved_at: Date.now() / 1000 };
-  const payload = Buffer.from(JSON.stringify(data));
+  const json = JSON.stringify(data);
 
-  mkdirSync(TOKEN_DIR, { recursive: true });
-
-  const key = await getOrCreateKey();
-  if (key) {
-    writeFileSync(TOKEN_FILE, encrypt(payload, key));
-  } else {
-    // Fallback: plaintext JSON
-    console.warn("[rh-for-agents] keytar unavailable — saving tokens as plaintext JSON");
-    writeFileSync(TOKEN_FILE, payload);
+  if (await secretsAvailable()) {
+    await Bun.secrets.set(KEYRING_SERVICE, KEYRING_NAME, json);
+    return "keychain";
   }
 
-  await chmod(TOKEN_FILE, 0o600);
-  return TOKEN_FILE;
+  // Fallback: plaintext JSON file (atomic write with correct permissions from creation)
+  console.warn("[rh-for-agents] Bun.secrets unavailable — saving tokens as plaintext JSON");
+  mkdirSync(TOKEN_DIR, { recursive: true, mode: 0o700 });
+  const tmpFile = `${FALLBACK_FILE}.tmp`;
+  writeFileSync(tmpFile, json, { mode: 0o600 });
+  renameSync(tmpFile, FALLBACK_FILE);
+  return FALLBACK_FILE;
 }
 
 export async function loadTokens(): Promise<TokenData | null> {
-  if (!existsSync(TOKEN_FILE)) return null;
-
-  const raw = readFileSync(TOKEN_FILE);
-
   try {
-    const key = await getOrCreateKey();
-    let data: unknown;
-    if (key) {
-      const decrypted = decrypt(raw, key);
-      data = JSON.parse(decrypted.toString());
-    } else {
-      // Try plaintext JSON fallback
-      data = JSON.parse(raw.toString());
+    if (await secretsAvailable()) {
+      const json = await Bun.secrets.get(KEYRING_SERVICE, KEYRING_NAME);
+      if (json) {
+        const data: unknown = JSON.parse(json);
+        if (isTokenData(data)) return data;
+      }
     }
+  } catch {
+    // Fall through to file fallback
+  }
 
-    if (typeof data === "object" && data !== null && "access_token" in data) {
-      return data as TokenData;
-    }
+  // Fallback: plaintext JSON file
+  if (!existsSync(FALLBACK_FILE)) return null;
+  try {
+    const raw = Bun.file(FALLBACK_FILE);
+    const data: unknown = await raw.json();
+    if (isTokenData(data)) return data;
     return null;
   } catch {
     return null;
   }
 }
 
-export function deleteTokens(): void {
-  if (existsSync(TOKEN_FILE)) {
-    unlinkSync(TOKEN_FILE);
+export async function deleteTokens(): Promise<void> {
+  try {
+    await Bun.secrets.delete({ service: KEYRING_SERVICE, name: KEYRING_NAME });
+  } catch {
+    // Bun.secrets unavailable
+  }
+
+  if (existsSync(FALLBACK_FILE)) {
+    unlinkSync(FALLBACK_FILE);
   }
 }

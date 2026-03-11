@@ -27,7 +27,10 @@ Place, monitor, and cancel stock/option/crypto orders.
 
 ### Order Flow
 
-#### Step 1: Parse the Request
+#### Step 1: Resolve Account
+Call `rh-for-agents:robinhood_get_accounts` to list accounts. If the user has multiple accounts, **ask which account to use** before proceeding. Never pick an account on the user's behalf.
+
+#### Step 2: Parse the Request
 Extract from the user's message:
 - Symbol (e.g., AAPL, BTC)
 - Side (buy/sell)
@@ -35,7 +38,7 @@ Extract from the user's message:
 - Order type (market/limit/stop) and prices
 - Asset type (stock/option/crypto)
 
-#### Step 2: Show Confirmation
+#### Step 3: Show Confirmation
 Get current price via `rh-for-agents:robinhood_get_stock_quote` (or `rh-for-agents:robinhood_get_crypto` for crypto), then present an order preview:
 ```
 Order Preview:
@@ -43,13 +46,13 @@ Order Preview:
   Type: Market order
   Current price: $150.00
   Estimated cost: ~$1,500.00
-  Account: default
+  Account: <account_number>
 
 Proceed? (yes/no)
 ```
 Wait for the user to explicitly confirm.
 
-#### Step 3: Place Order (after user confirms)
+#### Step 4: Place Order (after user confirms)
 
 ### Stock Orders
 Use `rh-for-agents:robinhood_place_stock_order` with parameters:
@@ -58,16 +61,20 @@ Use `rh-for-agents:robinhood_place_stock_order` with parameters:
 - `limit_price`: for limit/stop_limit orders
 - `stop_price`: for stop/stop_limit orders
 - `trail_amount` + `trail_type`: for trailing_stop orders
-- `account_number`: optional, for multi-account
+- `account_number`: **required** — get from `robinhood_get_accounts`
 - `time_in_force`: "gtc" (default) or "gfd"
 - `extended_hours`: boolean
 
 ### Option Orders
 Use `rh-for-agents:robinhood_place_option_order` with parameters:
-- `symbol`, `expiration_date`, `strike`, `option_type` ("call"/"put")
-- `side` ("buy"/"sell"), `position_effect` ("open"/"close")
-- `quantity`, `price` (limit price per contract)
-- `direction` ("debit"/"credit")
+- `symbol`: underlying ticker
+- `legs`: array of `{ expiration_date, strike, option_type, side, position_effect, ratio_quantity }` — single-leg or multi-leg for spreads
+- `price`: limit price per contract (single-leg) or net price (spreads)
+- `quantity`: number of contracts
+- `direction` ("debit"/"credit") — **required**
+- `stop_price` (optional): triggers stop-limit behavior
+- `time_in_force`: default "gfd"
+- `account_number`: **required** — get from `robinhood_get_accounts`
 
 ### Crypto Orders
 Use `rh-for-agents:robinhood_place_crypto_order` with parameters:
@@ -94,6 +101,7 @@ For TypeScript scripts using `rh-for-agents`, see [client-api.md](client-api.md)
 ## MCP Tools Used
 | Tool | Purpose |
 |------|---------|
+| `rh-for-agents:robinhood_get_accounts` | Get account numbers (required for orders) |
 | `rh-for-agents:robinhood_get_stock_quote` | Get current price for confirmation |
 | `rh-for-agents:robinhood_get_crypto` | Get crypto price for confirmation |
 | `rh-for-agents:robinhood_place_stock_order` | Place stock orders |

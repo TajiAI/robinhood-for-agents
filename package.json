@@ -23,7 +23,7 @@
     "bun"
   ],
   "engines": {
-    "bun": ">=1.0.0"
+    "bun": ">=1.3.0"
   },
   "bin": {
     "rh-for-agents": "./bin/rh-for-agents.ts"
@@ -44,9 +44,6 @@
     "@modelcontextprotocol/sdk": "^1.12.0",
     "playwright-core": "^1.50.0",
     "zod": "^4.3.6"
-  },
-  "optionalDependencies": {
-    "keytar": "^7.9.0"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.0.0",

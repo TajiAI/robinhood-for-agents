@@ -63,7 +63,7 @@ await rh.restoreSession();
 ```
 - All methods are `async` (native `fetch` under the hood)
 - Multi-account is first-class: every account-scoped method accepts `accountNumber`
-- Session cached to `~/.rh-for-agents/session.enc` (AES-256-GCM, key in OS keychain)
+- Session cached in OS keychain via `Bun.secrets` (macOS Keychain Services); plaintext fallback for CI
 - Token refresh via `refresh_token` + `device_token` when access token expires
 - Proper exceptions: `AuthenticationError`, `APIError`
 - **Do NOT use `phoenix.robinhood.com`** — it rejects TLS. Use `api.robinhood.com` endpoints only.
@@ -72,7 +72,7 @@ await rh.restoreSession();
 - Browser login (`robinhood_browser_login`) opens system Chrome via playwright-core
 - Purely passive — Playwright intercepts `/oauth2/token` network traffic, never interacts with the DOM
 - Request body (JSON) → captures `device_token`; Response → captures `access_token` + `refresh_token`
-- Tokens encrypted with AES-256-GCM, key stored in OS keychain (never on disk)
+- Tokens stored directly in OS keychain via `Bun.secrets` (never on disk)
 - `restoreSession()` validates cached token, falls back to refresh, then directs to browser login
 
 ## Safety Rules
@@ -80,6 +80,7 @@ await rh.restoreSession();
 - **NEVER** call fund transfer functions
 - **ALWAYS** confirm with user before placing any order
 - Order tools require explicit parameters - no defaults that could cause accidental trades
+- **NEVER** use real PII in code, docs, examples, or commit messages — this includes account numbers, tokens, device IDs, email addresses, and any other user-identifying data. Use placeholders like `"ACCOUNT_ID"`, `"xxx-token"`, etc.
 
 ## Testing
 ```bash

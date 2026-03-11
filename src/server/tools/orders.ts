@@ -36,7 +36,9 @@ export function registerOrderTools(server: McpServer): void {
         .default("gtc")
         .describe("Time in force: good till cancelled or good for day."),
       extended_hours: z.boolean().default(false).describe("Allow extended hours execution."),
-      account_number: z.string().optional().describe("Account number for multi-account."),
+      account_number: z
+        .string()
+        .describe("Robinhood account number. Get from robinhood_get_accounts."),
     },
     async ({
       symbol,
@@ -69,37 +71,46 @@ export function registerOrderTools(server: McpServer): void {
   );
 
   // -------------------------------------------------------------------------
-  // Place option order
+  // Place option order (single-leg or multi-leg spreads)
   // -------------------------------------------------------------------------
   server.tool(
     "robinhood_place_option_order",
-    "Place an option order. Requires explicit parameters. Always confirm with the user before calling.",
+    "Place a single-leg or multi-leg option order (verticals, iron condors, straddles, etc.). Always confirm with the user before calling.",
     {
       symbol: z.string().describe("Underlying stock ticker symbol."),
-      expiration_date: z.string().describe("Expiration date (YYYY-MM-DD)."),
-      strike: z.number().describe("Strike price."),
-      option_type: z.enum(["call", "put"]).describe("Option type."),
-      side: z.enum(["buy", "sell"]).describe("Order side."),
-      position_effect: z.enum(["open", "close"]).describe("Opening or closing a position."),
+      legs: z
+        .array(
+          z.object({
+            expiration_date: z.string().describe("Expiration date (YYYY-MM-DD)."),
+            strike: z.number().describe("Strike price."),
+            option_type: z.enum(["call", "put"]).describe("Option type."),
+            side: z.enum(["buy", "sell"]).describe("Buy or sell this leg."),
+            position_effect: z.enum(["open", "close"]).describe("Opening or closing."),
+            ratio_quantity: z.number().default(1).describe("Ratio quantity for this leg."),
+          }),
+        )
+        .describe("Option legs. Single-leg for simple orders, multiple legs for spreads."),
+      price: z.number().describe("Limit price per contract (single-leg) or net price (spreads)."),
       quantity: z.number().describe("Number of contracts."),
-      price: z.number().describe("Limit price per contract."),
       direction: z
         .enum(["debit", "credit"])
+        .describe("Debit for buys/debit spreads, credit for sells/credit spreads."),
+      stop_price: z
+        .number()
         .optional()
-        .describe("Order direction. Defaults to debit for buys, credit for sells."),
-      time_in_force: z.enum(["gtc", "gfd", "ioc", "opg"]).default("gtc").describe("Time in force."),
-      account_number: z.string().optional().describe("Account number for multi-account."),
+        .describe("Stop price. When set, order triggers as stop-limit."),
+      time_in_force: z.enum(["gtc", "gfd", "ioc", "opg"]).default("gfd").describe("Time in force."),
+      account_number: z
+        .string()
+        .describe("Robinhood account number. Get from robinhood_get_accounts."),
     },
     async ({
       symbol,
-      expiration_date,
-      strike,
-      option_type,
-      side,
-      position_effect,
-      quantity,
+      legs,
       price,
+      quantity,
       direction,
+      stop_price,
       time_in_force,
       account_number,
     }) => {
@@ -107,14 +118,22 @@ export function registerOrderTools(server: McpServer): void {
         const rh = await getAuthenticatedRh();
         const order = await rh.orderOption(
           symbol,
-          expiration_date,
-          strike,
-          option_type,
-          side,
-          position_effect,
-          quantity,
+          legs.map((l) => ({
+            expirationDate: l.expiration_date,
+            strike: l.strike,
+            optionType: l.option_type,
+            side: l.side,
+            positionEffect: l.position_effect,
+            ratioQuantity: l.ratio_quantity,
+          })),
           price,
-          { direction, timeInForce: time_in_force, accountNumber: account_number },
+          quantity,
+          direction,
+          {
+            stopPrice: stop_price,
+            timeInForce: time_in_force,
+            accountNumber: account_number,
+          },
         );
         return text({ status: "submitted", order });
       } catch (e) {

@@ -27,14 +27,24 @@ const SENSITIVE_KEYS = new Set([
   "token",
 ]);
 
-/** Shallow-clone an object, replacing known sensitive key values with [REDACTED]. */
+/** Deep-clone an object, replacing known sensitive key values with [REDACTED]. */
 export function scrubSensitiveKeys(
   obj: Record<string, unknown>,
 ): Record<string, unknown> {
-  const scrubbed = { ...obj };
-  for (const key of Object.keys(scrubbed)) {
+  const scrubbed: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(obj)) {
     if (SENSITIVE_KEYS.has(key)) {
       scrubbed[key] = REDACTED;
+    } else if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+      scrubbed[key] = scrubSensitiveKeys(value as Record<string, unknown>);
+    } else if (Array.isArray(value)) {
+      scrubbed[key] = value.map((item) =>
+        typeof item === "object" && item !== null && !Array.isArray(item)
+          ? scrubSensitiveKeys(item as Record<string, unknown>)
+          : item,
+      );
+    } else {
+      scrubbed[key] = value;
     }
   }
   return scrubbed;

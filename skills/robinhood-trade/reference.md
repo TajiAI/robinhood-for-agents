@@ -3,18 +3,17 @@
 ## Stock Orders
 
 ### robinhood_place_stock_order
-Place a stock order. Supports market, limit, stop, stop-limit, and trailing stop.
+Place a stock order. Supports market, limit, stop, stop-limit, and trailing stop. Order type is inferred from price parameters (e.g., providing `limit_price` makes it a limit order).
 
 **Parameters:**
 - `symbol` (string, required) — stock ticker
 - `side` (enum: "buy", "sell", required)
 - `quantity` (number, required) — shares (supports fractional)
-- `order_type` (enum: "market", "limit", "stop", "stop_limit", "trailing_stop", default: "market")
 - `limit_price` (number, optional) — required for limit/stop_limit
 - `stop_price` (number, optional) — required for stop/stop_limit
 - `trail_amount` (number, optional) — required for trailing_stop
 - `trail_type` (enum: "percentage", "amount", default: "percentage")
-- `account_number` (string, optional) — for multi-account
+- `account_number` (string, required)
 - `time_in_force` (enum: "gtc", "gfd", default: "gtc")
 - `extended_hours` (boolean, default: false)
 
@@ -29,20 +28,17 @@ Place a stock order. Supports market, limit, stop, stop-limit, and trailing stop
 ## Option Orders
 
 ### robinhood_place_option_order
-Place a single-leg option order.
+Place a single-leg or multi-leg option order (spreads, iron condors, straddles, etc.).
 
 **Parameters:**
-- `symbol` (string, required) — underlying stock ticker
-- `expiration_date` (string, required) — "YYYY-MM-DD"
-- `strike` (number, required)
-- `option_type` (enum: "call", "put", required)
-- `side` (enum: "buy", "sell", required)
-- `position_effect` (enum: "open", "close", required)
-- `quantity` (integer, required) — number of contracts
-- `price` (number, required) — limit price per contract
-- `direction` (enum: "debit", "credit", default: "debit")
-- `account_number` (string, optional)
-- `time_in_force` (enum: "gtc", "gfd", "ioc", "opg", default: "gtc")
+- `symbol` (string, required) — underlying ticker
+- `legs` (array, required) — each: `{ expiration_date, strike, option_type, side, position_effect, ratio_quantity }`
+- `price` (number, required) — limit price (single-leg) or net price (spreads)
+- `quantity` (number, required) — number of contracts
+- `direction` (enum: "debit", "credit", required)
+- `stop_price` (number, optional) — triggers stop-limit
+- `time_in_force` (enum: "gtc", "gfd", "ioc", "opg", default: "gfd")
+- `account_number` (string, required)
 
 ## Crypto Orders
 

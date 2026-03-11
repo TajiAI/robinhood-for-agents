@@ -5,7 +5,7 @@ import { AuthenticationError } from "../../src/client/errors.js";
 vi.mock("../../src/client/token-store.js", () => ({
   loadTokens: vi.fn().mockResolvedValue(null),
   saveTokens: vi.fn().mockResolvedValue("/tmp/session.enc"),
-  deleteTokens: vi.fn(),
+  deleteTokens: vi.fn().mockResolvedValue(undefined),
 }));
 
 import type { Mock } from "vitest";

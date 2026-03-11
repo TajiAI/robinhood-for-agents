@@ -309,6 +309,27 @@ export const OptionPositionSchema = z.object({
 export type OptionPosition = z.infer<typeof OptionPositionSchema>;
 
 // ---------------------------------------------------------------------------
+// Indexes
+// ---------------------------------------------------------------------------
+
+export const IndexInstrumentSchema = z.object({
+  id: z.string(),
+  symbol: z.string(),
+  simple_name: z.string().nullable().optional(),
+  state: z.string().optional(),
+  tradable_chain_ids: z.array(z.string()).optional(),
+});
+export type IndexInstrument = z.infer<typeof IndexInstrumentSchema>;
+
+export const IndexValueSchema = z.object({
+  value: z.string().nullable().optional(),
+  symbol: z.string().optional(),
+  instrument_id: z.string().optional(),
+  updated_at: z.string().optional(),
+});
+export type IndexValue = z.infer<typeof IndexValueSchema>;
+
+// ---------------------------------------------------------------------------
 // Stock Orders
 // ---------------------------------------------------------------------------
 
@@ -332,6 +353,15 @@ export const StockOrderSchema = z.object({
   cumulative_quantity: z.string().optional(),
   fees: z.string().optional(),
   extended_hours: z.boolean().optional(),
+  trailing_peg: z
+    .object({
+      type: z.string().optional(),
+      percentage: z.string().optional(),
+      price: z.object({ amount: z.string().optional() }).optional(),
+    })
+    .nullable()
+    .optional(),
+  ref_id: z.string().optional(),
 });
 export type StockOrder = z.infer<typeof StockOrderSchema>;
 
@@ -348,7 +378,12 @@ export const OptionOrderSchema = z.object({
   price: z.string().nullable().optional(),
   quantity: z.string().optional(),
   type: z.string().optional(),
+  trigger: z.string().optional(),
+  stop_price: z.string().nullable().optional(),
   time_in_force: z.string().optional(),
+  strategy: z.string().nullable().optional(),
+  opening_strategy: z.string().nullable().optional(),
+  closing_strategy: z.string().nullable().optional(),
   legs: z
     .array(
       z.object({
@@ -364,6 +399,8 @@ export const OptionOrderSchema = z.object({
     .optional(),
   created_at: z.string().optional(),
   updated_at: z.string().optional(),
+  ref_id: z.string().optional(),
+  chain_symbol: z.string().optional(),
 });
 export type OptionOrder = z.infer<typeof OptionOrderSchema>;
 

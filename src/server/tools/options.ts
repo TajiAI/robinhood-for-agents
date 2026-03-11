@@ -2,40 +2,72 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import type { OptionInstrument } from "../../client/types.js";
 import { getAuthenticatedRh, text, textError } from "./_helpers.js";
+
+/** Keep only the N strikes closest to the current price. */
+function filterNearestStrikes(
+  options: OptionInstrument[],
+  currentPrice: number,
+  maxStrikes: number,
+): OptionInstrument[] {
+  const uniqueStrikes = [...new Set(options.map((o) => Number(o.strike_price)))];
+  uniqueStrikes.sort((a, b) => Math.abs(a - currentPrice) - Math.abs(b - currentPrice));
+  const keepStrikes = new Set(uniqueStrikes.slice(0, maxStrikes));
+  return options.filter((o) => keepStrikes.has(Number(o.strike_price)));
+}
 
 export function registerOptionsTools(server: McpServer): void {
   server.tool(
     "robinhood_get_options",
-    "Get options chain with greeks for a stock symbol.",
+    "Get options chain with greeks for a stock or index symbol (SPX, NDX, VIX, RUT, XSP supported).",
     {
-      symbol: z.string().describe("Stock ticker symbol."),
+      symbol: z.string().describe("Stock or index ticker symbol."),
       expiration_date: z.string().optional().describe("Filter by expiration date (YYYY-MM-DD)."),
       strike_price: z.number().optional().describe("Filter by strike price."),
       option_type: z.enum(["call", "put"]).optional().describe("Filter by type."),
+      max_strikes: z
+        .number()
+        .optional()
+        .describe("Limit to N strikes nearest to current price (ATM). Reduces response size."),
     },
-    async ({ symbol, expiration_date, strike_price, option_type }) => {
+    async ({ symbol, expiration_date, strike_price, option_type, max_strikes }) => {
       try {
         const rh = await getAuthenticatedRh();
         const s = symbol.trim().toUpperCase();
         const result: Record<string, unknown> = {};
 
-        const chain = await rh.getChains(s);
+        const chain = await rh.getChains(s, { expirationDate: expiration_date });
         result.chain_info = chain;
 
-        const options = await rh.findTradableOptions(s, {
+        const indexValue = await rh.getIndexValue(s);
+        if (indexValue) {
+          result.index_value = indexValue;
+        }
+
+        let options = await rh.findTradableOptions(s, {
           expirationDate: expiration_date,
           strikePrice: strike_price,
           optionType: option_type,
         });
 
+        // Filter to nearest strikes if requested
+        if (max_strikes != null && strike_price == null && options.length > 0) {
+          let currentPrice = 0;
+          if (indexValue?.value) {
+            currentPrice = Number(indexValue.value);
+          } else {
+            const quotes = await rh.getQuotes([s]);
+            const price = quotes[0]?.last_trade_price;
+            if (price) currentPrice = Number(price);
+          }
+          if (currentPrice > 0) {
+            options = filterNearestStrikes(options, currentPrice, max_strikes);
+          }
+        }
+
         if (expiration_date && strike_price != null && option_type) {
-          const marketData = await rh.getOptionMarketData(
-            s,
-            expiration_date,
-            strike_price,
-            option_type,
-          );
+          const marketData = await rh.getOptionMarketData(s, expiration_date, strike_price, option_type);
           result.market_data = marketData;
         }
 

@@ -104,6 +104,12 @@ Add to your MCP client's config (e.g. `~/Library/Application Support/Claude/clau
 
 Start your agent and say "setup robinhood" (or call `robinhood_browser_login` directly). Chrome will open to the real Robinhood login page — log in with your credentials and MFA. The session is cached and auto-restores for ~24 hours.
 
+## Example
+
+> "Buy 1 50-delta SPX call expiring tomorrow"
+
+![SPX options chain with greeks and order summary](docs/images/spx-options-example.png)
+
 ## MCP Tools (18)
 
 All 18 tools work with every MCP-compatible agent.

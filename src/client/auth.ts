@@ -100,5 +100,5 @@ export async function logout(session: RobinhoodSession): Promise<void> {
     }
   }
   session.clearAuth();
-  deleteTokens();
+  await deleteTokens();
 }

@@ -22,7 +22,7 @@ console.log(`Order ${order.id}: ${order.state}`);
 | MCP Tool | Client Method |
 |----------|--------------|
 | `robinhood_place_stock_order` | `orderStock(symbol, quantity, side, opts?)` |
-| `robinhood_place_option_order` | `orderOption(symbol, quantity, side, ...)` |
+| `robinhood_place_option_order` | `orderOption(symbol, legs, price, quantity, direction, opts?)` |
 | `robinhood_place_crypto_order` | `orderCrypto(symbol, side, amount, opts?)` |
 | `robinhood_get_orders` (stock) | `getAllStockOrders()` / `getOpenStockOrders()` |
 | `robinhood_get_orders` (option) | `getAllOptionOrders()` / `getOpenOptionOrders()` |
@@ -56,10 +56,24 @@ Options:
 - `timeInForce?: "gtc" | "gfd"` — defaults to `"gtc"`
 - `extendedHours?: boolean`
 
-### `orderOption(symbol, quantity, side, expirationDate, strikePrice, optionType, positionEffect, price, opts?): Promise<OptionOrder>`
+### `orderOption(symbol, legs, price, quantity, direction, opts?): Promise<OptionOrder>`
 
 ```typescript
-await client.orderOption("AAPL", 1, "buy", "2026-04-17", 200, "call", "open", 3.50);
+// Buy a single call
+await client.orderOption("AAPL", [
+  { expirationDate: "2026-04-17", strike: 200, optionType: "call", side: "buy", positionEffect: "open" }
+], 3.50, 1, "debit");
+
+// Sell to close
+await client.orderOption("AAPL", [
+  { expirationDate: "2026-04-17", strike: 200, optionType: "call", side: "sell", positionEffect: "close" }
+], 4.00, 1, "credit");
+
+// Bull call spread
+await client.orderOption("AAPL", [
+  { expirationDate: "2026-04-17", strike: 200, optionType: "call", side: "buy", positionEffect: "open" },
+  { expirationDate: "2026-04-17", strike: 210, optionType: "call", side: "sell", positionEffect: "open" },
+], 2.50, 1, "debit");
 ```
 
 ### `orderCrypto(symbol, side, quantityOrPrice, opts?): Promise<CryptoOrder>`

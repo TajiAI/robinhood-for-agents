@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentMeta } from "./types.js";
@@ -6,12 +6,12 @@ import type { AgentMeta } from "./types.js";
 function installMcp(binPath: string): void {
   // Remove existing entry (ignore errors if not found)
   try {
-    execSync("claude mcp remove rh-for-agents", { stdio: "pipe" });
+    execFileSync("claude", ["mcp", "remove", "rh-for-agents"], { stdio: "pipe" });
   } catch {
     // not found — fine
   }
 
-  execSync(`claude mcp add -s user rh-for-agents -- bun run ${binPath}`, {
+  execFileSync("claude", ["mcp", "add", "-s", "user", "rh-for-agents", "--", "bun", "run", binPath], {
     stdio: "pipe",
   });
 }

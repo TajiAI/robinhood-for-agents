@@ -7,7 +7,7 @@ import { getAuthenticatedRh, text, textError } from "./_helpers.js";
 export function registerStockTools(server: McpServer): void {
   server.tool(
     "robinhood_get_stock_quote",
-    "Get quote and fundamentals for one or more stock tickers.",
+    "Get quote and fundamentals for one or more stock or index tickers (SPX, NDX, VIX, RUT, XSP supported).",
     {
       symbols: z
         .string()
@@ -23,10 +23,21 @@ export function registerStockTools(server: McpServer): void {
         const results: Record<string, unknown> = {};
         for (let i = 0; i < symbolList.length; i++) {
           const sym = symbolList[i] as string;
-          results[sym] = {
-            quote: quotes[i] ?? {},
-            fundamentals: fundamentals[i] ?? {},
-          };
+          const quote = quotes[i];
+          if (quote && Object.keys(quote).length > 0) {
+            results[sym] = {
+              quote,
+              fundamentals: fundamentals[i] ?? {},
+            };
+          } else {
+            // Fallback: try index value for symbols like SPX, NDX, VIX
+            const indexValue = await rh.getIndexValue(sym);
+            if (indexValue) {
+              results[sym] = { index_value: indexValue };
+            } else {
+              results[sym] = { quote: {}, fundamentals: fundamentals[i] ?? {} };
+            }
+          }
         }
         return text(results);
       } catch (e) {

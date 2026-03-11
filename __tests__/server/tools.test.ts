@@ -40,6 +40,7 @@ vi.mock("../../src/client/index.js", () => {
     getNews: vi.fn().mockResolvedValue([{ title: "News" }]),
     getRatings: vi.fn().mockResolvedValue({}),
     getEarnings: vi.fn().mockResolvedValue([]),
+    getIndexValue: vi.fn().mockResolvedValue(null),
     getChains: vi.fn().mockResolvedValue({ id: "chain1", expiration_dates: ["2025-01-17"] }),
     findTradableOptions: vi.fn().mockResolvedValue([
       {
@@ -81,7 +82,7 @@ vi.mock("../../src/client/index.js", () => {
     AuthenticationError: class extends Error {},
     saveTokens: vi.fn(),
     loadTokens: vi.fn(),
-    deleteTokens: vi.fn(),
+    deleteTokens: vi.fn().mockResolvedValue(undefined),
   };
 });
 

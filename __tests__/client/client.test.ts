@@ -398,14 +398,129 @@ describe("RobinhoodClient", () => {
     });
 
     it("throws NotFoundError when no tradable option found", async () => {
-      // getChains
-      mockRequestGet.mockResolvedValueOnce({ id: "c1", expiration_dates: [] });
+      // getIndexes (no index match for AAPL)
+      mockRequestGet.mockResolvedValueOnce([]);
+      // getChains (equity path)
+      mockRequestGet.mockResolvedValueOnce([{ id: "c1", expiration_dates: [] }]);
       // findTradableOptions returns empty
       mockRequestGet.mockResolvedValueOnce([]);
 
       await expect(
-        client.orderOption("AAPL", "2025-01-17", 150, "call", "buy", "open", 1, 5.0),
+        client.orderOption(
+          "AAPL",
+          [
+            {
+              expirationDate: "2025-01-17",
+              strike: 150,
+              optionType: "call",
+              side: "buy",
+              positionEffect: "open",
+            },
+          ],
+          5.0,
+          1,
+          "debit",
+        ),
       ).rejects.toThrow(NotFoundError);
+    });
+
+    it("includes account URL from getAccounts when accountNumber not provided", async () => {
+      // getIndexes
+      mockRequestGet.mockResolvedValueOnce([]);
+      // getChains (equity path)
+      mockRequestGet.mockResolvedValueOnce([{ id: "c1", expiration_dates: ["2025-01-17"] }]);
+      // findTradableOptions
+      mockRequestGet.mockResolvedValueOnce([
+        {
+          url: "https://api.robinhood.com/options/instruments/opt1/",
+          id: "opt1",
+          strike_price: "150.0000",
+          expiration_date: "2025-01-17",
+          type: "call",
+          state: "active",
+          tradability: "tradable",
+        },
+      ]);
+      // getAccounts (for resolveAccountUrl)
+      mockRequestGet.mockResolvedValueOnce([
+        { url: "https://api.robinhood.com/accounts/123/", account_number: "123" },
+      ]);
+      // POST order
+      mockRequestPost.mockResolvedValueOnce({ id: "opt-order1", state: "queued" });
+
+      await client.orderOption(
+        "AAPL",
+        [
+          {
+            expirationDate: "2025-01-17",
+            strike: 150,
+            optionType: "call",
+            side: "buy",
+            positionEffect: "open",
+          },
+        ],
+        5.0,
+        1,
+        "debit",
+      );
+
+      expect(mockRequestPost).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.any(String),
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            account: "https://api.robinhood.com/accounts/123/",
+          }),
+        }),
+      );
+    });
+
+    it("includes account URL from accountNumber param when provided", async () => {
+      // getIndexes
+      mockRequestGet.mockResolvedValueOnce([]);
+      // getChains (equity path)
+      mockRequestGet.mockResolvedValueOnce([{ id: "c1", expiration_dates: ["2025-01-17"] }]);
+      // findTradableOptions
+      mockRequestGet.mockResolvedValueOnce([
+        {
+          url: "https://api.robinhood.com/options/instruments/opt1/",
+          id: "opt1",
+          strike_price: "150.0000",
+          expiration_date: "2025-01-17",
+          type: "call",
+          state: "active",
+          tradability: "tradable",
+        },
+      ]);
+      // POST order
+      mockRequestPost.mockResolvedValueOnce({ id: "opt-order1", state: "queued" });
+
+      await client.orderOption(
+        "AAPL",
+        [
+          {
+            expirationDate: "2025-01-17",
+            strike: 150,
+            optionType: "call",
+            side: "buy",
+            positionEffect: "open",
+          },
+        ],
+        5.0,
+        1,
+        "debit",
+        { accountNumber: "789" },
+      );
+
+      expect(mockRequestPost).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.any(String),
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            account: "https://api.robinhood.com/accounts/789/",
+          }),
+        }),
+      );
     });
   });
 

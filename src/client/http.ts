@@ -4,6 +4,20 @@ import { z } from "zod";
 import { redactTokens, scrubSensitiveKeys } from "../redact.js";
 import { APIError, NotFoundError, RateLimitError } from "./errors.js";
 import type { RobinhoodSession } from "./session.js";
+import { API_BASE, NUMMUS_BASE } from "./urls.js";
+
+const TRUSTED_ORIGINS = new Set([
+  new URL(API_BASE).origin,
+  new URL(NUMMUS_BASE).origin,
+]);
+
+/** Reject URLs that point outside trusted Robinhood domains. */
+function assertTrustedUrl(url: string): void {
+  const parsed = new URL(url);
+  if (!TRUSTED_ORIGINS.has(parsed.origin)) {
+    throw new APIError(`Refusing to follow URL to untrusted host: ${parsed.hostname}`);
+  }
+}
 
 /** Parse a single value against a Zod schema. Throws ZodError on mismatch. */
 export function parseOne<T>(schema: z.ZodType<T>, data: unknown): T {
@@ -44,6 +58,7 @@ export async function requestGet(
     const results = [...((data.results as unknown[]) ?? [])];
     let nextUrl = data.next as string | null;
     while (nextUrl) {
+      assertTrustedUrl(nextUrl);
       const resp = await session.get(nextUrl);
       await raiseForStatus(resp);
       const page = (await resp.json()) as Record<string, unknown>;

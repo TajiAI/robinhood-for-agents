@@ -19,6 +19,8 @@ import type {
   Fundamental,
   HistoricalDataPoint,
   Holding,
+  IndexInstrument,
+  IndexValue,
   Instrument,
   InvestmentProfile,
   News,
@@ -45,6 +47,7 @@ const MULTI_ACCOUNT_PARAMS: Record<string, string> = {
 export class RobinhoodClient {
   private session: RobinhoodSession;
   private _loggedIn = false;
+  private _indexCache: Map<string, IndexInstrument> | null = null;
 
   constructor(opts?: { timeoutMs?: number }) {
     this.session = createSession(opts);
@@ -73,6 +76,18 @@ export class RobinhoodClient {
     if (!this._loggedIn) {
       throw new NotLoggedInError();
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Internal helpers
+  // ---------------------------------------------------------------------------
+
+  /** Resolve account URL — required by Robinhood for all order submissions. */
+  private async resolveAccountUrl(accountNumber?: string): Promise<string> {
+    if (accountNumber) return urls.account(accountNumber);
+    const accounts = await this.getAccounts();
+    if (accounts.length === 0) throw new NotFoundError("No brokerage account found");
+    return (accounts[0] as Account).url;
   }
 
   // ---------------------------------------------------------------------------
@@ -134,6 +149,9 @@ export class RobinhoodClient {
 
   async getInstrumentByUrl(url: string): Promise<Instrument> {
     this.requireAuth();
+    if (!url.startsWith(urls.API_BASE)) {
+      throw new Error(`Refusing to fetch instrument from untrusted URL: ${url}`);
+    }
     return (await requestGet(this.session, url)) as Instrument;
   }
 
@@ -285,16 +303,73 @@ export class RobinhoodClient {
   }
 
   // ---------------------------------------------------------------------------
+  // Indexes
+  // ---------------------------------------------------------------------------
+
+  private async getIndexes(): Promise<Map<string, IndexInstrument>> {
+    if (this._indexCache) return this._indexCache;
+    this.requireAuth();
+    const indexes = (await requestGet(this.session, urls.indexes(), {
+      dataType: "results",
+    })) as IndexInstrument[];
+    this._indexCache = new Map();
+    for (const idx of indexes) {
+      this._indexCache.set(idx.symbol.toUpperCase(), idx);
+    }
+    return this._indexCache;
+  }
+
+  async getIndexValue(symbol: string): Promise<IndexValue | null> {
+    this.requireAuth();
+    const indexMap = await this.getIndexes();
+    const index = indexMap.get(symbol.toUpperCase());
+    if (!index) return null;
+    const resp = (await requestGet(this.session, urls.indexValues(), {
+      params: { ids: index.id },
+    })) as { status?: string; data?: Array<{ status?: string; data?: IndexValue }> };
+    return resp.data?.[0]?.data ?? null;
+  }
+
+  // ---------------------------------------------------------------------------
   // Options
   // ---------------------------------------------------------------------------
 
-  async getChains(symbol: string): Promise<OptionChain> {
+  async getChains(symbol: string, opts?: { expirationDate?: string }): Promise<OptionChain> {
     this.requireAuth();
+    const sym = symbol.toUpperCase();
+    const emptyChain = { id: "", expiration_dates: [] } as unknown as OptionChain;
+
+    // Check if this is an index symbol (SPX, NDX, VIX, RUT, XSP, etc.)
+    const indexMap = await this.getIndexes();
+    const index = indexMap.get(sym);
+    if (index?.tradable_chain_ids?.length) {
+      const chains = (await requestGet(this.session, urls.optionChains(), {
+        dataType: "results",
+        params: { ids: index.tradable_chain_ids.join(",") },
+      })) as OptionChain[];
+
+      if (chains.length === 0) return emptyChain;
+      if (chains.length === 1) return chains[0] ?? emptyChain;
+
+      // Multiple chains (e.g. SPXW weeklies + SPX monthlies).
+      // Pick the chain that contains the requested expiration date.
+      const expDate = opts?.expirationDate;
+      if (expDate) {
+        const matching = chains.filter((c) => c.expiration_dates.includes(expDate));
+        if (matching.length > 0) return matching[0] ?? emptyChain;
+      }
+
+      // Default: return the chain with the most expiration dates (weeklies/dailies)
+      chains.sort((a, b) => b.expiration_dates.length - a.expiration_dates.length);
+      return chains[0] ?? emptyChain;
+    }
+
+    // Equity path (existing behavior)
     const chains = (await requestGet(this.session, urls.optionChains(), {
       dataType: "results",
-      params: { equity_instrument_ids: "", state: "active", symbol: symbol.toUpperCase() },
+      params: { equity_instrument_ids: "", state: "active", symbol: sym },
     })) as OptionChain[];
-    return chains[0] ?? ({ id: "", expiration_dates: [] } as unknown as OptionChain);
+    return chains[0] ?? emptyChain;
   }
 
   async findTradableOptions(
@@ -302,20 +377,34 @@ export class RobinhoodClient {
     opts?: { expirationDate?: string; strikePrice?: number; optionType?: string },
   ): Promise<OptionInstrument[]> {
     this.requireAuth();
-    const chain = await this.getChains(symbol);
+    const chain = await this.getChains(symbol, {
+      expirationDate: opts?.expirationDate,
+    });
     const params: Record<string, string> = {
       chain_id: chain.id,
-      state: "active",
-      tradability: "tradable",
     };
-    if (opts?.expirationDate) params.expiration_date = opts.expirationDate;
+    if (opts?.expirationDate) params.expiration_dates = opts.expirationDate;
     if (opts?.strikePrice != null) params.strike_price = String(opts.strikePrice);
     if (opts?.optionType) params.type = opts.optionType;
 
-    return (await requestGet(this.session, urls.optionInstruments(), {
+    let results = (await requestGet(this.session, urls.optionInstruments(), {
       dataType: "pagination",
       params,
     })) as OptionInstrument[];
+
+    // Client-side filtering — the API doesn't always honor query params
+    if (opts?.expirationDate) {
+      results = results.filter((o) => o.expiration_date === opts.expirationDate);
+    }
+    if (opts?.strikePrice != null) {
+      const target = String(opts.strikePrice);
+      results = results.filter((o) => Number(o.strike_price) === Number(target));
+    }
+    if (opts?.optionType) {
+      results = results.filter((o) => o.type === opts.optionType);
+    }
+
+    return results;
   }
 
   async getOptionMarketData(
@@ -432,6 +521,14 @@ export class RobinhoodClient {
       throw new Error("Cannot combine trailAmount with limitPrice or stopPrice");
     }
 
+    // Fractional orders must be market orders with gfd
+    const isFractional = !Number.isInteger(quantity);
+    if (isFractional) {
+      if (opts?.limitPrice != null || opts?.stopPrice != null || opts?.trailAmount != null) {
+        throw new Error("Fractional orders must be market orders (no limit, stop, or trailing stop)");
+      }
+    }
+
     // Find the instrument URL
     const insts = await this.findInstruments(sym);
     if (insts.length === 0) throw new NotFoundError(`Instrument not found: ${sym}`);
@@ -458,15 +555,7 @@ export class RobinhoodClient {
       trigger = "immediate";
     }
 
-    // Resolve account URL from explicit param or first account
-    let accountUrl: string;
-    if (opts?.accountNumber) {
-      accountUrl = urls.account(opts.accountNumber);
-    } else {
-      const accounts = await this.getAccounts();
-      if (accounts.length === 0) throw new NotFoundError("No brokerage account found");
-      accountUrl = (accounts[0] as Account).url;
-    }
+    const accountUrl = await this.resolveAccountUrl(opts?.accountNumber);
 
     const payload: Record<string, unknown> = {
       account: accountUrl,
@@ -476,8 +565,9 @@ export class RobinhoodClient {
       quantity: String(quantity),
       type: orderType,
       trigger,
-      time_in_force: opts?.timeInForce ?? "gtc",
+      time_in_force: isFractional ? "gfd" : (opts?.timeInForce ?? "gtc"),
       extended_hours: opts?.extendedHours ?? false,
+      ref_id: crypto.randomUUID(),
     };
 
     if (opts?.limitPrice != null) payload.price = String(opts.limitPrice);
@@ -532,48 +622,70 @@ export class RobinhoodClient {
 
   async orderOption(
     symbol: string,
-    expirationDate: string,
-    strike: number,
-    optionType: "call" | "put",
-    side: "buy" | "sell",
-    positionEffect: "open" | "close",
-    quantity: number,
+    legs: Array<{
+      expirationDate: string;
+      strike: number;
+      optionType: "call" | "put";
+      side: "buy" | "sell";
+      positionEffect: "open" | "close";
+      ratioQuantity?: number;
+    }>,
     price: number,
+    quantity: number,
+    direction: "debit" | "credit",
     opts?: {
-      direction?: "debit" | "credit";
+      stopPrice?: number;
       timeInForce?: string;
       accountNumber?: string;
     },
   ): Promise<OptionOrder> {
     this.requireAuth();
-    const options = await this.findTradableOptions(symbol, {
-      expirationDate,
-      strikePrice: strike,
-      optionType,
-    });
-    if (options.length === 0) {
-      throw new NotFoundError(
-        `No tradable option found: ${symbol} ${expirationDate} ${strike} ${optionType}`,
-      );
+    if (legs.length === 0) {
+      throw new Error("At least one leg is required");
     }
-    const opt = options[0] as OptionInstrument;
+
+    // Resolve each leg's option instrument
+    const resolvedLegs = [];
+    for (const leg of legs) {
+      const options = await this.findTradableOptions(symbol, {
+        expirationDate: leg.expirationDate,
+        strikePrice: leg.strike,
+        optionType: leg.optionType,
+      });
+      if (options.length === 0) {
+        throw new NotFoundError(
+          `No tradable option found: ${symbol} ${leg.expirationDate} ${leg.strike} ${leg.optionType}`,
+        );
+      }
+      const opt = options[0] as OptionInstrument;
+      resolvedLegs.push({
+        option_id: opt.id,
+        side: leg.side,
+        position_effect: leg.positionEffect,
+        ratio_quantity: leg.ratioQuantity ?? 1,
+      });
+    }
+
+    const accountUrl = await this.resolveAccountUrl(opts?.accountNumber);
 
     const payload: Record<string, unknown> = {
-      direction: opts?.direction ?? (side === "buy" ? "debit" : "credit"),
-      legs: [
-        {
-          option: opt.url,
-          side,
-          position_effect: positionEffect,
-          ratio_quantity: 1,
-        },
-      ],
+      account: accountUrl,
+      direction,
+      legs: resolvedLegs,
       price: String(price),
       quantity: String(quantity),
       type: "limit",
-      time_in_force: opts?.timeInForce ?? "gtc",
-      trigger: "immediate",
+      time_in_force: opts?.timeInForce ?? "gfd",
+      trigger: opts?.stopPrice != null ? "stop" : "immediate",
+      market_hours: "regular_hours",
+      override_day_trade_checks: true,
+      override_dtbp_checks: true,
+      ref_id: crypto.randomUUID(),
     };
+
+    if (opts?.stopPrice != null) {
+      payload.stop_price = String(opts.stopPrice);
+    }
 
     return (await requestPost(this.session, urls.optionOrders(), {
       payload,
@@ -637,13 +749,19 @@ export class RobinhoodClient {
       side,
       type: opts?.orderType ?? "market",
       time_in_force: "gtc",
+      ref_id: crypto.randomUUID(),
     };
 
     if (amountIn === "quantity") {
       payload.quantity = String(amountOrQuantity);
     } else {
-      // Dollar amount
-      payload.price = String(amountOrQuantity);
+      // Dollar amount — Robinhood expects quantity, so we calculate it from the dollar amount
+      if (opts?.limitPrice != null) {
+        // Use limitPrice to derive quantity from dollar amount
+        payload.quantity = String(amountOrQuantity / opts.limitPrice);
+      } else {
+        payload.price = String(amountOrQuantity);
+      }
     }
 
     if (opts?.limitPrice != null) {

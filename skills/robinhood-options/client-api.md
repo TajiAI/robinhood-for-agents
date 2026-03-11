@@ -10,6 +10,7 @@ import { RobinhoodClient } from "rh-for-agents";
 const client = new RobinhoodClient();
 await client.restoreSession();
 
+// Equity options
 const chain = await client.getChains("AAPL");
 console.log("Expirations:", chain.expiration_dates);
 
@@ -17,32 +18,43 @@ const options = await client.findTradableOptions("AAPL", {
   expirationDate: "2026-04-17",
   optionType: "call",
 });
+
+// Index options (SPX, NDX, VIX, RUT, XSP)
+const spxChain = await client.getChains("SPX"); // returns SPXW (daily) chain by default
+const spxOpts = await client.findTradableOptions("SPX", { expirationDate: "2026-03-11" });
+const spxValue = await client.getIndexValue("SPX"); // { value: "5700.00", symbol: "SPX" }
 ```
 
 ## MCP Tool → Client Method Mapping
 
 | MCP Tool | Client Method |
 |----------|--------------|
-| `robinhood_get_options` (chain) | `getChains(symbol)` |
+| `robinhood_get_options` (chain) | `getChains(symbol, opts?)` |
 | `robinhood_get_options` (instruments) | `findTradableOptions(symbol, opts?)` |
 | `robinhood_get_options` (greeks) | `getOptionMarketData(symbol, expDate, strike, type)` |
+| `robinhood_get_options` (index value) | `getIndexValue(symbol)` |
 | `robinhood_get_orders` (options) | `getOpenOptionPositions(accountNumber?)` |
-| `robinhood_place_option_order` | `orderOption(...)` |
+| `robinhood_place_option_order` | `orderOption(symbol, legs, price, quantity, direction, opts?)` |
 
 ## Methods
 
-### `getChains(symbol): Promise<OptionChain>`
+### `getChains(symbol, opts?): Promise<OptionChain>`
 
-Returns chain metadata including all available expiration dates.
+Returns chain metadata including all available expiration dates. Works for both equities and indexes (SPX, NDX, VIX, RUT, XSP).
+
+For indexes with multiple chains (e.g. SPXW weeklies + SPX monthlies), pass `expirationDate` to select the correct chain. Defaults to the chain with the most expirations (SPXW).
 
 ```typescript
 const chain = await client.getChains("AAPL");
 // => { id, expiration_dates: ["2026-04-17", ...], ... }
+
+const spxChain = await client.getChains("SPX", { expirationDate: "2026-03-11" });
+// => SPXW chain (daily expirations, PM-settled)
 ```
 
 ### `findTradableOptions(symbol, opts?): Promise<OptionInstrument[]>`
 
-Returns tradable option instruments filtered by expiration, strike, and type.
+Returns option instruments filtered by expiration, strike, and type. Performs client-side filtering for reliability. Works outside market hours — does not require `state: "active"` or `tradability: "tradable"`.
 
 ```typescript
 // All options for an expiration
@@ -69,20 +81,40 @@ const data = await client.getOptionMarketData("AAPL", "2026-04-17", 200, "call")
 // => [{ adjusted_mark_price, delta, gamma, theta, vega, implied_volatility, open_interest, volume, ... }]
 ```
 
+### `getIndexValue(symbol): Promise<IndexValue | null>`
+
+Returns the current value of an index. Returns `null` for non-index symbols.
+
+```typescript
+const value = await client.getIndexValue("SPX");
+// => { value: "5700.00", symbol: "SPX", instrument_id: "...", updated_at: "..." }
+
+const notIndex = await client.getIndexValue("AAPL");
+// => null
+```
+
 ### `getOpenOptionPositions(accountNumber?): Promise<OptionPosition[]>`
 
 ```typescript
 const positions = await client.getOpenOptionPositions();
 ```
 
-### `orderOption(symbol, quantity, side, expirationDate, strikePrice, optionType, positionEffect, price, opts?): Promise<OptionOrder>`
+### `orderOption(symbol, legs, price, quantity, direction, opts?): Promise<OptionOrder>`
 
 ```typescript
-// Buy to open a call
-await client.orderOption("AAPL", 1, "buy", "2026-04-17", 200, "call", "open", 3.50);
+// Buy a single call
+await client.orderOption("AAPL", [
+  { expirationDate: "2026-04-17", strike: 200, optionType: "call", side: "buy", positionEffect: "open" }
+], 3.50, 1, "debit");
 
 // Sell to close
-await client.orderOption("AAPL", 1, "sell", "2026-04-17", 200, "call", "close", 4.00, {
-  direction: "credit",
-});
+await client.orderOption("AAPL", [
+  { expirationDate: "2026-04-17", strike: 200, optionType: "call", side: "sell", positionEffect: "close" }
+], 4.00, 1, "credit");
+
+// Bull call spread
+await client.orderOption("AAPL", [
+  { expirationDate: "2026-04-17", strike: 200, optionType: "call", side: "buy", positionEffect: "open" },
+  { expirationDate: "2026-04-17", strike: 210, optionType: "call", side: "sell", positionEffect: "open" },
+], 2.50, 1, "debit");
 ```

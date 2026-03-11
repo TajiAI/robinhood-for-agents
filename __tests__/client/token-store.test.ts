@@ -1,104 +1,127 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Mock node:fs and node:fs/promises before importing the module
+// Mock node:fs before importing the module
 vi.mock("node:fs", () => ({
   existsSync: vi.fn(),
   mkdirSync: vi.fn(),
-  readFileSync: vi.fn(),
   writeFileSync: vi.fn(),
+  renameSync: vi.fn(),
   unlinkSync: vi.fn(),
 }));
 
-vi.mock("node:fs/promises", () => ({
-  chmod: vi.fn().mockResolvedValue(undefined),
-}));
-
-// Mock keytar as unavailable by default
-vi.mock("keytar", () => {
-  throw new Error("keytar not available");
-});
-
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import type { Mock } from "vitest";
 import { deleteTokens, loadTokens, saveTokens } from "../../src/client/token-store.js";
 
 const mockExistsSync = existsSync as Mock;
-const mockReadFileSync = readFileSync as Mock;
 const mockWriteFileSync = writeFileSync as Mock;
 const mockUnlinkSync = unlinkSync as Mock;
+
+const sampleTokens = {
+  access_token: "tok123",
+  refresh_token: "ref456",
+  token_type: "Bearer",
+  device_token: "dev789",
+  account_hint: "",
+};
+
+// Mock Bun.secrets at the global level
+const mockSecretsStore = new Map<string, string>();
+const mockSecrets = {
+  get: vi.fn(
+    async (service: string, name: string) => mockSecretsStore.get(`${service}:${name}`) ?? null,
+  ),
+  set: vi.fn(async (service: string, name: string, value: string) => {
+    mockSecretsStore.set(`${service}:${name}`, value);
+  }),
+  delete: vi.fn(async (opts: { service: string; name: string }) => {
+    return mockSecretsStore.delete(`${opts.service}:${opts.name}`);
+  }),
+};
+
+// biome-ignore lint/suspicious/noExplicitAny: test mock
+(globalThis as any).Bun = { ...((globalThis as any).Bun ?? {}), secrets: mockSecrets };
 
 describe("token-store", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockSecretsStore.clear();
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  describe("saveTokens", () => {
-    it("writes plaintext JSON when keytar is unavailable", async () => {
+  describe("saveTokens (keychain available)", () => {
+    it("stores tokens in Bun.secrets", async () => {
+      const result = await saveTokens(sampleTokens);
+
+      expect(result).toBe("keychain");
+      expect(mockSecrets.set).toHaveBeenCalledWith(
+        "rh-for-agents",
+        "session-tokens",
+        expect.any(String),
+      );
+
+      const stored = mockSecretsStore.get("rh-for-agents:session-tokens");
+      expect(stored).toBeDefined();
+      const parsed = JSON.parse(stored ?? "");
+      expect(parsed.access_token).toBe("tok123");
+      expect(parsed.refresh_token).toBe("ref456");
+      expect(parsed.saved_at).toBeTypeOf("number");
+    });
+
+    it("does not write to filesystem when keychain available", async () => {
+      await saveTokens(sampleTokens);
+      expect(mockWriteFileSync).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("saveTokens (keychain unavailable)", () => {
+    it("falls back to plaintext JSON file", async () => {
+      mockSecrets.get.mockRejectedValueOnce(new Error("unavailable"));
       const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-      await saveTokens({
-        access_token: "tok123",
-        refresh_token: "ref456",
-        token_type: "Bearer",
-        device_token: "dev789",
-        account_hint: "",
-      });
+      await saveTokens(sampleTokens);
 
       expect(mkdirSync).toHaveBeenCalled();
       expect(mockWriteFileSync).toHaveBeenCalled();
 
-      // Verify the written data is valid JSON with our tokens
       const writtenData = mockWriteFileSync.mock.calls[0]?.[1];
-      expect(writtenData).toBeInstanceOf(Buffer);
-      const parsed = JSON.parse(writtenData.toString());
+      const parsed = JSON.parse(writtenData);
       expect(parsed.access_token).toBe("tok123");
-      expect(parsed.refresh_token).toBe("ref456");
-      expect(parsed.saved_at).toBeTypeOf("number");
 
-      // Should warn about plaintext fallback
-      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("keytar unavailable"));
+      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("Bun.secrets unavailable"));
     });
   });
 
   describe("loadTokens", () => {
-    it("returns null when token file does not exist", async () => {
+    it("loads tokens from Bun.secrets", async () => {
+      await saveTokens(sampleTokens);
+      const result = await loadTokens();
+
+      expect(result).not.toBeNull();
+      expect(result?.access_token).toBe("tok123");
+      expect(result?.device_token).toBe("dev789");
+    });
+
+    it("returns null when no tokens stored", async () => {
       mockExistsSync.mockReturnValue(false);
       const result = await loadTokens();
       expect(result).toBeNull();
     });
 
-    it("loads plaintext JSON tokens", async () => {
-      const tokenData = {
-        access_token: "tok",
-        refresh_token: "ref",
-        token_type: "Bearer",
-        device_token: "dev",
-        saved_at: Date.now() / 1000,
-      };
-      mockExistsSync.mockReturnValue(true);
-      mockReadFileSync.mockReturnValue(Buffer.from(JSON.stringify(tokenData)));
-
-      const result = await loadTokens();
-      expect(result).not.toBeNull();
-      expect(result?.access_token).toBe("tok");
-      expect(result?.device_token).toBe("dev");
-    });
-
-    it("returns null for corrupt data", async () => {
-      mockExistsSync.mockReturnValue(true);
-      mockReadFileSync.mockReturnValue(Buffer.from("not json"));
+    it("returns null for invalid JSON in keychain", async () => {
+      mockSecretsStore.set("rh-for-agents:session-tokens", "not json");
+      mockExistsSync.mockReturnValue(false);
 
       const result = await loadTokens();
       expect(result).toBeNull();
     });
 
     it("returns null for JSON without access_token", async () => {
-      mockExistsSync.mockReturnValue(true);
-      mockReadFileSync.mockReturnValue(Buffer.from(JSON.stringify({ foo: "bar" })));
+      mockSecretsStore.set("rh-for-agents:session-tokens", JSON.stringify({ foo: "bar" }));
+      mockExistsSync.mockReturnValue(false);
 
       const result = await loadTokens();
       expect(result).toBeNull();
@@ -106,16 +129,22 @@ describe("token-store", () => {
   });
 
   describe("deleteTokens", () => {
-    it("deletes file when it exists", () => {
+    it("deletes from keychain and cleans up fallback file", async () => {
+      mockSecretsStore.set("rh-for-agents:session-tokens", "data");
       mockExistsSync.mockReturnValue(true);
-      deleteTokens();
+
+      await deleteTokens();
+
+      expect(mockSecrets.delete).toHaveBeenCalledWith({
+        service: "rh-for-agents",
+        name: "session-tokens",
+      });
       expect(mockUnlinkSync).toHaveBeenCalled();
     });
 
-    it("does nothing when file does not exist", () => {
+    it("does not throw when nothing to delete", async () => {
       mockExistsSync.mockReturnValue(false);
-      deleteTokens();
-      expect(mockUnlinkSync).not.toHaveBeenCalled();
+      await expect(deleteTokens()).resolves.toBeUndefined();
     });
   });
 });

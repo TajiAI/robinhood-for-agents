@@ -1,5 +1,7 @@
 /** HTTP session wrapper for Robinhood API using native fetch. */
 
+import { API_BASE, NUMMUS_BASE } from "./urls.js";
+
 export const DEFAULT_HEADERS: Record<string, string> = {
   Accept: "*/*",
   "Accept-Encoding": "gzip, deflate, br",
@@ -10,6 +12,44 @@ export const DEFAULT_HEADERS: Record<string, string> = {
 };
 
 const DEFAULT_TIMEOUT_MS = 16_000;
+
+const TRUSTED_ORIGINS = new Set([
+  new URL(API_BASE).origin,
+  new URL(NUMMUS_BASE).origin,
+  new URL("https://robinhood.com").origin,
+]);
+
+/**
+ * Follow redirects manually, refusing to send auth headers to untrusted hosts.
+ * Returns the final response after following up to `maxRedirects` hops.
+ */
+async function safeFetch(
+  url: string,
+  init: RequestInit & { signal: AbortSignal },
+  maxRedirects = 5,
+): Promise<Response> {
+  let currentUrl = url;
+  for (let i = 0; i <= maxRedirects; i++) {
+    const resp = await fetch(currentUrl, { ...init, redirect: "manual" });
+
+    if (resp.status < 300 || resp.status >= 400) {
+      return resp;
+    }
+
+    // 3xx redirect
+    const location = resp.headers.get("location");
+    if (!location) return resp;
+
+    // Resolve relative redirects
+    const resolved = new URL(location, currentUrl).href;
+    const target = new URL(resolved);
+    if (!TRUSTED_ORIGINS.has(target.origin)) {
+      throw new Error(`Refusing redirect to untrusted host: ${target.hostname}`);
+    }
+    currentUrl = resolved;
+  }
+  throw new Error("Too many redirects");
+}
 
 export class RobinhoodSession {
   private headers: Record<string, string>;
@@ -40,11 +80,10 @@ export class RobinhoodSession {
 
   async get(url: string, params?: Record<string, string>): Promise<Response> {
     const target = params ? `${url}?${new URLSearchParams(params)}` : url;
-    return fetch(target, {
+    return safeFetch(target, {
       method: "GET",
       headers: this.headers,
       signal: AbortSignal.timeout(this.timeoutMs),
-      redirect: "follow",
     });
   }
 
@@ -73,21 +112,19 @@ export class RobinhoodSession {
       ).toString();
     }
 
-    return fetch(url, {
+    return safeFetch(url, {
       method: "POST",
       headers,
       body: requestBody,
       signal: AbortSignal.timeout(timeout),
-      redirect: "follow",
     });
   }
 
   async delete(url: string): Promise<Response> {
-    return fetch(url, {
+    return safeFetch(url, {
       method: "DELETE",
       headers: this.headers,
       signal: AbortSignal.timeout(this.timeoutMs),
-      redirect: "follow",
     });
   }
 }

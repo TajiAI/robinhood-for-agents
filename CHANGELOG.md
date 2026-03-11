@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-03-10
+
+### Added
+
+- **Multi-leg option spreads** — unified `orderOption()` method and `robinhood_place_option_order` MCP tool now support single-leg and multi-leg orders (verticals, iron condors, straddles, butterflies) via a `legs` array
+- **Stop-limit option orders** — new `stop_price` parameter triggers stop-limit behavior on option orders
+- **Fractional share guardrails** — fractional stock orders auto-enforce `gfd` time-in-force and reject non-market order types with clear error messages
+- **Idempotent orders** — all order types (stock, option, crypto) now include `ref_id` (UUID) for idempotency, matching Robinhood's expected payload format
+
+### Fixed
+
+- **Option order 500 errors** — added missing `ref_id` and `override_dtbp_checks` fields to option order payload; changed default `time_in_force` from `gtc` to `gfd`
+- **Crypto dollar-amount + limit price conflict** — when using `amountIn: "price"` with `limitPrice`, the client now correctly derives quantity instead of sending conflicting `price` fields
+
+### Changed
+
+- **Unified option order API** — merged separate single-leg and spread methods into one `orderOption(symbol, legs, price, quantity, direction, opts?)` signature; `direction` is now required
+- **Token storage** — migrated from AES-256-GCM file encryption to OS keychain via `Bun.secrets` (zero deps, no files on disk)
+- Updated all skill docs (options, trade) to reflect new legs-based option order API
+- `StockOrder` type now captures `trailing_peg` and `ref_id`; `OptionOrder` captures `trigger`, `stop_price`, `strategy`, `ref_id`
+
 ## [0.2.0] - 2026-03-10
 
 ### Added
@@ -39,5 +60,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Safety controls: blocked fund transfers, blocked bulk cancels, explicit order parameters
 - Support for Claude Code, Codex, and OpenClaw agents
 
+[0.4.0]: https://github.com/kevin1chun/rh-for-agents/compare/v0.2.0...v0.4.0
 [0.2.0]: https://github.com/kevin1chun/rh-for-agents/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/kevin1chun/rh-for-agents/releases/tag/v0.1.0

@@ -6,6 +6,16 @@
 export const API_BASE = "https://api.robinhood.com";
 export const NUMMUS_BASE = "https://nummus.robinhood.com";
 
+const SAFE_PATH_SEGMENT = /^[a-zA-Z0-9_.:@-]+$/;
+
+/** Reject path segments that could cause path traversal or injection. */
+function safeSegment(value: string, label: string): string {
+  if (!SAFE_PATH_SEGMENT.test(value)) {
+    throw new Error(`Invalid ${label}: must contain only alphanumeric, hyphen, underscore, or dot characters`);
+  }
+  return value;
+}
+
 // ---------------------------------------------------------------------------
 // Auth
 // ---------------------------------------------------------------------------
@@ -131,7 +141,7 @@ export function earnings(): string {
 }
 
 export function tags(tag: string): string {
-  return `${API_BASE}/midlands/tags/tag/${tag}/`;
+  return `${API_BASE}/midlands/tags/tag/${safeSegment(tag, "tag")}/`;
 }
 
 // ---------------------------------------------------------------------------
@@ -168,6 +178,18 @@ export function optionPositions(): string {
 
 export function optionAggregatePositions(): string {
   return `${API_BASE}/options/aggregate_positions/`;
+}
+
+// ---------------------------------------------------------------------------
+// Indexes
+// ---------------------------------------------------------------------------
+
+export function indexes(): string {
+  return `${API_BASE}/indexes/`;
+}
+
+export function indexValues(): string {
+  return `${API_BASE}/marketdata/indexes/values/v1/`;
 }
 
 // ---------------------------------------------------------------------------
@@ -222,6 +244,7 @@ export function cancelOptionOrder(orderId: string): string {
   return `${API_BASE}/options/orders/${orderId}/cancel/`;
 }
 
+
 export function cancelCryptoOrder(orderId: string): string {
   return `${NUMMUS_BASE}/orders/${orderId}/cancel/`;
 }
@@ -235,7 +258,7 @@ export function markets(): string {
 }
 
 export function marketHours(market: string, date: string): string {
-  return `${API_BASE}/markets/${market}/hours/${date}/`;
+  return `${API_BASE}/markets/${safeSegment(market, "market")}/hours/${safeSegment(date, "date")}/`;
 }
 
 export function topMoversSp500(): string {

@@ -21,7 +21,7 @@ Research and analyze stocks using Robinhood data.
 ### Step 1: Fetch Data
 Call these MCP tools in parallel:
 
-1. **`rh-for-agents:robinhood_get_stock_quote`** with `symbols: "AAPL"` — returns quote + fundamentals
+1. **`rh-for-agents:robinhood_get_stock_quote`** with `symbols: "AAPL"` — returns quote + fundamentals. Also works for index symbols (SPX, NDX, VIX, RUT, XSP) — returns current index value.
 2. **`rh-for-agents:robinhood_get_news`** with `symbol: "AAPL"` — returns news, analyst ratings, and earnings
 3. **`rh-for-agents:robinhood_get_historicals`** with `symbols: "AAPL", interval: "day", span: "year"` — OHLCV price history
 
