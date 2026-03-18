@@ -273,3 +273,11 @@ export function topMovers(): string {
 export function top100(): string {
   return `${API_BASE}/midlands/tags/tag/100-most-popular/`;
 }
+
+// ---------------------------------------------------------------------------
+// Streaming / Market Data
+// ---------------------------------------------------------------------------
+
+export function marketdataToken(): string {
+  return `${API_BASE}/marketdata/token/v1/`;
+}

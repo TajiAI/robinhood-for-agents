@@ -8,6 +8,7 @@ import { registerOptionsTools } from "./tools/options.js";
 import { registerOrderTools } from "./tools/orders.js";
 import { registerPortfolioTools } from "./tools/portfolio.js";
 import { registerStockTools } from "./tools/stocks.js";
+import { registerStreamingTools } from "./tools/streaming.js";
 
 export function createServer(): McpServer {
   const server = new McpServer({
@@ -22,6 +23,7 @@ export function createServer(): McpServer {
   registerCryptoTools(server);
   registerOrderTools(server);
   registerMarketTools(server);
+  registerStreamingTools(server);
 
   return server;
 }

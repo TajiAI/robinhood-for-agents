@@ -1,0 +1,215 @@
+/** Streaming module — manages dxLink connection and order book state. */
+
+import type { RobinhoodSession } from "../session.js";
+import { DxLinkClient } from "./dxlink-client.js";
+import { DxLinkFeed } from "./feed.js";
+import { OrderBook, type OrderBookSnapshot } from "./order-book.js";
+import { StreamingAuth } from "./streaming-auth.js";
+
+export { DxLinkClient } from "./dxlink-client.js";
+export {
+  StreamingAuthError,
+  StreamingConnectionError,
+  StreamingError,
+  StreamingProtocolError,
+} from "./errors.js";
+export { DxLinkFeed } from "./feed.js";
+export type { OrderBookLevel, OrderBookSnapshot } from "./order-book.js";
+export { OrderBook } from "./order-book.js";
+export { StreamingAuth } from "./streaming-auth.js";
+export type {
+  EventType,
+  OrderEvent,
+  QuoteEvent,
+  StreamingTokenData,
+  TradeEvent,
+} from "./types.js";
+
+const MAX_RECONNECT_ATTEMPTS = 10;
+const BASE_DELAY_MS = 1_000;
+const MAX_DELAY_MS = 30_000;
+
+/** Delay for initial book population after subscribe. */
+const BOOK_SETTLE_MS = 3_000;
+
+export class StreamingManager {
+  private client: DxLinkClient | null = null;
+  private feed: DxLinkFeed | null = null;
+  private auth: StreamingAuth;
+  private books = new Map<string, OrderBook>();
+  private reconnectAttempts = 0;
+  private reconnecting = false;
+
+  constructor(session: RobinhoodSession) {
+    this.auth = new StreamingAuth(session);
+  }
+
+  /** Ensure the WebSocket connection is established. */
+  async ensureConnected(): Promise<void> {
+    if (this.client?.isConnected) return;
+
+    const tokenData = await this.auth.ensureToken();
+
+    const client = new DxLinkClient();
+    client.on("close", () => this.handleDisconnect());
+
+    await client.connect(tokenData.wss_url, tokenData.token);
+
+    this.client = client;
+    this.feed = new DxLinkFeed(client);
+    this.reconnectAttempts = 0;
+  }
+
+  /**
+   * Subscribe to L2 order book for a symbol.
+   * Returns immediately; the book populates asynchronously.
+   */
+  async subscribeOrderBook(symbol: string): Promise<void> {
+    await this.ensureConnected();
+
+    if (this.books.has(symbol)) return;
+
+    const book = new OrderBook(symbol);
+    this.books.set(symbol, book);
+
+    await this.feed?.subscribe("Order", [symbol], (events) => {
+      for (const event of events) {
+        if (event.eventSymbol === symbol) {
+          book.processEvent(event);
+        }
+      }
+    });
+  }
+
+  /**
+   * Get the current order book snapshot.
+   * Auto-subscribes if not yet subscribed, waits for initial data.
+   */
+  async getOrderBookSnapshot(symbol: string, depth?: number): Promise<OrderBookSnapshot> {
+    if (!this.books.has(symbol)) {
+      await this.subscribeOrderBook(symbol);
+      // Wait for the book to populate
+      await this.waitForBookData(symbol, BOOK_SETTLE_MS);
+    }
+    const book = this.books.get(symbol);
+    if (!book) throw new Error(`Order book for ${symbol} not found`);
+    return book.getSnapshot(depth);
+  }
+
+  /** Unsubscribe from L2 order book for a symbol. */
+  unsubscribeOrderBook(symbol: string): void {
+    const book = this.books.get(symbol);
+    if (!book) return;
+
+    this.feed?.unsubscribe("Order", [symbol]);
+    this.books.delete(symbol);
+  }
+
+  /** Disconnect and clean up all state. */
+  disconnect(): void {
+    this.feed?.destroy();
+    this.feed = null;
+    this.client?.disconnect();
+    this.client = null;
+    for (const book of this.books.values()) book.markStale();
+  }
+
+  /** Wait for at least one event in the book, up to timeoutMs. */
+  private waitForBookData(symbol: string, timeoutMs: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const book = this.books.get(symbol);
+      if (!book) {
+        resolve();
+        return;
+      }
+
+      const start = Date.now();
+      const check = () => {
+        const snap = book.getSnapshot(1);
+        if (snap.eventCount > 0 || Date.now() - start >= timeoutMs) {
+          resolve();
+          return;
+        }
+        setTimeout(check, 100);
+      };
+      check();
+    });
+  }
+
+  private async handleDisconnect(): Promise<void> {
+    if (this.reconnecting) return;
+    this.reconnecting = true;
+
+    // Mark all books stale
+    for (const book of this.books.values()) book.markStale();
+
+    while (this.reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+      const delay = Math.min(BASE_DELAY_MS * 2 ** this.reconnectAttempts, MAX_DELAY_MS);
+      const jitter = Math.random() * 1000;
+      await new Promise<void>((r) => setTimeout(r, delay + jitter));
+      this.reconnectAttempts++;
+
+      try {
+        // Clean up old client
+        this.feed?.destroy();
+        this.feed = null;
+        this.client?.disconnect();
+        this.client = null;
+
+        // Reconnect
+        const tokenData = await this.auth.fetchToken();
+        const client = new DxLinkClient();
+        client.on("close", () => this.handleDisconnect());
+        await client.connect(tokenData.wss_url, tokenData.token);
+
+        this.client = client;
+        this.feed = new DxLinkFeed(client);
+
+        // Re-subscribe all books
+        const symbols = [...this.books.keys()];
+        for (const book of this.books.values()) book.reset();
+
+        for (const symbol of symbols) {
+          const book = this.books.get(symbol);
+          if (book) {
+            await this.feed.subscribe("Order", [symbol], (events) => {
+              for (const event of events) {
+                if (event.eventSymbol === symbol) {
+                  book.processEvent(event);
+                }
+              }
+            });
+          }
+        }
+
+        this.reconnectAttempts = 0;
+        this.reconnecting = false;
+        return;
+      } catch {
+        // Retry
+      }
+    }
+
+    this.reconnecting = false;
+    // Exhausted attempts — go dormant. Next tool call will retry.
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Module-level singleton
+// ---------------------------------------------------------------------------
+
+let _manager: StreamingManager | null = null;
+
+export function getStreamingManager(session: RobinhoodSession): StreamingManager {
+  if (!_manager) {
+    _manager = new StreamingManager(session);
+  }
+  return _manager;
+}
+
+/** Reset the singleton (for testing). */
+export function resetStreamingManager(): void {
+  _manager?.disconnect();
+  _manager = null;
+}
