@@ -3,7 +3,7 @@
 [![CI](https://github.com/TajiAI/robinhood-for-agents/actions/workflows/ci.yml/badge.svg)](https://github.com/TajiAI/robinhood-for-agents/actions/workflows/ci.yml)
 [![GitHub Package](https://img.shields.io/github/v/release/TajiAI/robinhood-for-agents?label=package)](https://github.com/TajiAI/robinhood-for-agents/packages)
 [![ClawHub](https://img.shields.io/badge/ClawHub-robinhood--for--agents-blue)](https://clawhub.ai/kevin1chun/robinhood-for-agents)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License: Proprietary](https://img.shields.io/badge/License-Proprietary-red.svg)](LICENSE)
 
 Robinhood for AI agents — an MCP server with 18 structured tools and a standalone TypeScript client, in a single package.
 
@@ -391,4 +391,4 @@ This software is provided "as is" without warranty of any kind. See [LICENSE](LI
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+Proprietary — TajiAI internal use only. See [LICENSE](LICENSE).
