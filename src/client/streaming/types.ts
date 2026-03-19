@@ -111,18 +111,15 @@ export type DxLinkServerMessage = z.infer<typeof DxLinkServerMessageSchema>;
 /** Canonical field lists for each event type, sent in FEED_SETUP. */
 export const EVENT_FIELDS = {
   Order: [
-    "eventType",
+    "eventFlags",
     "eventSymbol",
-    "eventTime",
+    "eventType",
     "index",
-    "ordeSide",
-    "scope",
+    "side",
+    "sequence",
     "price",
     "size",
-    "exchangeCode",
-    "source",
-    "marketMaker",
-    "count",
+    "time",
   ],
   Quote: [
     "eventType",
@@ -131,9 +128,11 @@ export const EVENT_FIELDS = {
     "bidPrice",
     "bidSize",
     "bidExchangeCode",
+    "bidTime",
     "askPrice",
     "askSize",
     "askExchangeCode",
+    "askTime",
   ],
   Trade: [
     "eventType",
@@ -158,16 +157,21 @@ export const EVENT_FIELDS = {
     "tickDirection",
   ],
   Candle: [
-    "eventType",
-    "eventSymbol",
-    "eventTime",
-    "open",
-    "high",
-    "low",
     "close",
+    "eventFlags",
+    "eventSymbol",
+    "eventType",
+    "eventTime",
+    "high",
+    "impVolatility",
+    "low",
+    "open",
+    "openInterest",
+    "time",
     "volume",
-    "count",
     "vwap",
+    "sequence",
+    "count",
   ],
 } as const;
 
@@ -175,18 +179,16 @@ export type EventType = keyof typeof EVENT_FIELDS;
 
 /** A parsed Order event from FEED_DATA. */
 export interface OrderEvent {
-  eventType: string;
+  eventFlags: number;
   eventSymbol: string;
-  eventTime: number;
+  eventType: string;
   index: number;
-  orderSide: string;
-  scope: string;
+  /** "BUY" or "SELL". Field name is "side" in the dxLink protocol. */
+  side: string;
+  sequence: number;
   price: number;
   size: number;
-  exchangeCode: string;
-  source: string;
-  marketMaker: string;
-  count: number;
+  time: number;
 }
 
 /** A parsed Quote event from FEED_DATA. */
@@ -197,9 +199,11 @@ export interface QuoteEvent {
   bidPrice: number;
   bidSize: number;
   bidExchangeCode: string;
+  bidTime: number;
   askPrice: number;
   askSize: number;
   askExchangeCode: string;
+  askTime: number;
 }
 
 /** A parsed Trade event from FEED_DATA. */

@@ -36,12 +36,22 @@ export class StreamingManager {
   private client: DxLinkClient | null = null;
   private feed: DxLinkFeed | null = null;
   private auth: StreamingAuth;
+  private session: RobinhoodSession;
   private books = new Map<string, OrderBook>();
   private reconnectAttempts = 0;
   private reconnecting = false;
 
   constructor(session: RobinhoodSession) {
+    this.session = session;
     this.auth = new StreamingAuth(session);
+  }
+
+  /** Build WebSocket upgrade headers (Authorization + Origin). */
+  private upgradeHeaders(): Record<string, string> {
+    const token = this.session.getAuthTokenForRevocation();
+    const headers: Record<string, string> = { Origin: "https://robinhood.com" };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    return headers;
   }
 
   /** Ensure the WebSocket connection is established. */
@@ -53,7 +63,9 @@ export class StreamingManager {
     const client = new DxLinkClient();
     client.on("close", () => this.handleDisconnect());
 
-    await client.connect(tokenData.wss_url, tokenData.token);
+    await client.connect(tokenData.wss_url, tokenData.token, {
+      headers: this.upgradeHeaders(),
+    });
 
     this.client = client;
     this.feed = new DxLinkFeed(client);
@@ -160,7 +172,9 @@ export class StreamingManager {
         const tokenData = await this.auth.fetchToken();
         const client = new DxLinkClient();
         client.on("close", () => this.handleDisconnect());
-        await client.connect(tokenData.wss_url, tokenData.token);
+        await client.connect(tokenData.wss_url, tokenData.token, {
+          headers: this.upgradeHeaders(),
+        });
 
         this.client = client;
         this.feed = new DxLinkFeed(client);

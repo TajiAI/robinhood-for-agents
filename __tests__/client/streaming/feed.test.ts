@@ -16,21 +16,18 @@ function createMockClient() {
     waitFor: vi.fn().mockResolvedValue({
       type: "FEED_CONFIG",
       channel: 3,
-      dataFormat: "COMPACT",
+      dataFormat: "FULL",
       eventFields: {
         Order: [
-          "eventType",
+          "eventFlags",
           "eventSymbol",
-          "eventTime",
+          "eventType",
           "index",
-          "ordeSide",
-          "scope",
+          "side",
+          "sequence",
           "price",
           "size",
-          "exchangeCode",
-          "source",
-          "marketMaker",
-          "count",
+          "time",
         ],
       },
     }),
@@ -42,7 +39,7 @@ function createMockClient() {
 }
 
 describe("DxLinkFeed", () => {
-  it("opens a channel and sends FEED_SETUP + FEED_SUBSCRIPTION", async () => {
+  it("opens a channel and sends FEED_SETUP + FEED_SUBSCRIPTION with source for Order", async () => {
     const mock = createMockClient();
     // biome-ignore lint/suspicious/noExplicitAny: test mock
     const feed = new DxLinkFeed(mock as any);
@@ -50,21 +47,23 @@ describe("DxLinkFeed", () => {
     const callback = vi.fn();
     await feed.subscribe("Order", ["SPY"], callback);
 
-    // Should have sent FEED_SETUP
+    // Should have sent FEED_SETUP with FULL format for Order
     expect(mock.send).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "FEED_SETUP",
         channel: 3,
-        acceptDataFormat: "COMPACT",
+        acceptDataFormat: "FULL",
+        acceptAggregationPeriod: 0.25,
       }),
     );
 
-    // Should have sent FEED_SUBSCRIPTION
+    // Should have sent FEED_SUBSCRIPTION with source: "NTV" and reset: true (first sub)
     expect(mock.send).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "FEED_SUBSCRIPTION",
         channel: 3,
-        add: [{ type: "Order", symbol: "SPY" }],
+        reset: true,
+        add: [{ type: "Order", symbol: "SPY", source: "NTV" }],
       }),
     );
   });
@@ -82,13 +81,17 @@ describe("DxLinkFeed", () => {
     // openChannel should only be called once
     expect(mock.openChannel).toHaveBeenCalledTimes(1);
 
-    // Second subscription should add AAPL
-    expect(mock.send).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "FEED_SUBSCRIPTION",
-        add: [{ type: "Order", symbol: "AAPL" }],
-      }),
-    );
+    // Second subscription should add AAPL with source but NO reset flag
+    const secondSub = mock.send.mock.calls.find((c: unknown[]) => {
+      const msg = c[0] as Record<string, unknown>;
+      return (
+        msg.type === "FEED_SUBSCRIPTION" &&
+        Array.isArray(msg.add) &&
+        (msg.add as Array<Record<string, unknown>>).some((e) => e.symbol === "AAPL")
+      );
+    });
+    expect(secondSub).toBeDefined();
+    expect((secondSub?.[0] as Record<string, unknown>).reset).toBeUndefined();
   });
 
   it("does not re-subscribe already subscribed symbols", async () => {
@@ -110,7 +113,7 @@ describe("DxLinkFeed", () => {
     expect(subCalls).toHaveLength(0);
   });
 
-  it("dispatches parsed COMPACT data to callbacks", async () => {
+  it("dispatches parsed FULL data to callbacks for Order", async () => {
     const mock = createMockClient();
     // biome-ignore lint/suspicious/noExplicitAny: test mock
     const feed = new DxLinkFeed(mock as any);
@@ -118,13 +121,22 @@ describe("DxLinkFeed", () => {
     const callback = vi.fn();
     await feed.subscribe("Order", ["SPY"], callback);
 
-    // Simulate FEED_DATA with COMPACT format
+    // Simulate FEED_DATA with FULL format (keyed objects)
     mock.simulateMessage({
       type: "FEED_DATA",
       channel: 3,
       data: [
-        "Order",
-        ["Order", "SPY", 1710000000, 12345, "BUY", "AGGREGATE", 500.5, 200, "Q", "NTV", "", 3],
+        {
+          eventFlags: 0,
+          eventSymbol: "SPY",
+          eventType: "Order",
+          index: 12345,
+          side: "BUY",
+          sequence: 1,
+          price: 500.5,
+          size: 200,
+          time: 1710000000,
+        },
       ],
     });
 
@@ -135,11 +147,11 @@ describe("DxLinkFeed", () => {
       eventSymbol: "SPY",
       price: 500.5,
       size: 200,
-      ordeSide: "BUY",
+      side: "BUY",
     });
   });
 
-  it("sends unsubscribe for removed symbols", async () => {
+  it("sends unsubscribe with source for Order symbols", async () => {
     const mock = createMockClient();
     // biome-ignore lint/suspicious/noExplicitAny: test mock
     const feed = new DxLinkFeed(mock as any);
@@ -150,7 +162,7 @@ describe("DxLinkFeed", () => {
     expect(mock.send).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "FEED_SUBSCRIPTION",
-        remove: [{ type: "Order", symbol: "SPY" }],
+        remove: [{ type: "Order", symbol: "SPY", source: "NTV" }],
       }),
     );
   });

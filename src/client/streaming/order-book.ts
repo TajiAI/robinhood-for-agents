@@ -20,8 +20,9 @@ export interface OrderBookSnapshot {
 }
 
 export class OrderBook {
-  private bids = new Map<number, OrderBookLevel>();
-  private asks = new Map<number, OrderBookLevel>();
+  /** Keyed by string index (dxFeed indices are 17+ digit integers that exceed Number precision). */
+  private bids = new Map<string, OrderBookLevel>();
+  private asks = new Map<string, OrderBookLevel>();
   private _lastUpdated = 0;
   private _eventCount = 0;
   private _stale = false;
@@ -33,15 +34,15 @@ export class OrderBook {
 
   /** Process a single Order event and update the book. */
   processEvent(event: Record<string, unknown>): void {
-    const side = String(event.orderSide ?? event.ordeSide ?? "");
-    const index = Number(event.index ?? 0);
+    // dxLink uses "side" (Legend protocol), fallback to legacy "orderSide"/"ordeSide"
+    const side = String(event.side ?? event.orderSide ?? event.ordeSide ?? "");
+    const index = String(event.index ?? "");
     const price = Number(event.price ?? 0);
-    const size = Number(event.size ?? 0);
-    const exchangeCode = String(event.exchangeCode ?? "");
-    const count = Number(event.count ?? 0);
-    const time = Number(event.eventTime ?? 0);
+    const rawSize = Number(event.size ?? 0);
+    const size = Number.isFinite(rawSize) ? rawSize : 0;
+    const time = Number(event.time ?? event.eventTime ?? 0);
 
-    if (!side || !index) return;
+    if (!side || index === "" || index === "0" || index === "undefined") return;
 
     this._eventCount++;
     this._lastUpdated = Date.now();
@@ -52,7 +53,7 @@ export class OrderBook {
     if (size <= 0) {
       map.delete(index);
     } else {
-      map.set(index, { price, size, exchangeCode, count, time });
+      map.set(index, { price, size, exchangeCode: "", count: 0, time });
     }
   }
 

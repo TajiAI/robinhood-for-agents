@@ -5,13 +5,20 @@ import { EVENT_FIELDS, type EventType } from "./types.js";
 
 type EventCallback = (events: Array<Record<string, unknown>>) => void;
 
+/** Default dxFeed source for L2 Order events (NASDAQ TotalView). */
+const ORDER_SOURCE = "NTV";
+
 interface ChannelState {
   eventType: EventType;
   channel: number;
   /** Field order as confirmed by FEED_CONFIG (or our requested order). */
   fields: string[];
+  /** "COMPACT" (positional arrays) or "FULL" (keyed objects). */
+  dataFormat: string;
   symbols: Set<string>;
   callbacks: EventCallback[];
+  /** Whether the first subscription has been sent (controls reset flag). */
+  initialized: boolean;
 }
 
 export class DxLinkFeed {
@@ -38,30 +45,47 @@ export class DxLinkFeed {
       const channel = await this.client.openChannel("FEED");
       const fields = [...EVENT_FIELDS[eventType]];
 
+      // Use FULL format for all event types (matches Legend's protocol)
+      const fmt = "FULL";
+
       state = {
         eventType,
         channel,
         fields,
+        dataFormat: fmt,
         symbols: new Set(),
         callbacks: [],
+        initialized: false,
       };
       this.channels.set(eventType, state);
 
-      // Send FEED_SETUP
       this.client.send({
         type: "FEED_SETUP",
         channel,
-        acceptDataFormat: "COMPACT",
+        acceptDataFormat: fmt,
+        acceptAggregationPeriod: 0.25,
         acceptEventFields: { [eventType]: fields },
-      });
+      } as unknown as Record<string, unknown>);
 
-      // Wait for FEED_CONFIG
-      const config = await this.client.waitFor(
+      // Server sends 1-2 FEED_CONFIGs: first without eventFields, then with.
+      // Wait for the first, then briefly wait for one with eventFields.
+      const firstConfig = await this.client.waitFor(
         (msg) => msg.type === "FEED_CONFIG" && msg.channel === channel,
       );
 
+      let finalConfig = firstConfig;
+      if (!firstConfig.eventFields) {
+        // Try to catch the second FEED_CONFIG with eventFields (2s timeout)
+        finalConfig = await this.client
+          .waitFor(
+            (msg) => msg.type === "FEED_CONFIG" && msg.channel === channel && !!msg.eventFields,
+            2000,
+          )
+          .catch(() => firstConfig);
+      }
+
       // Update field order from server response
-      const serverFields = config.eventFields as Record<string, string[]> | undefined;
+      const serverFields = finalConfig.eventFields as Record<string, string[]> | undefined;
       if (serverFields?.[eventType]) {
         state.fields = serverFields[eventType];
       }
@@ -74,11 +98,27 @@ export class DxLinkFeed {
     if (newSymbols.length > 0) {
       for (const s of newSymbols) state.symbols.add(s);
 
-      this.client.send({
+      // Event-specific subscription parameters
+      const addEntries = newSymbols.map((symbol) => {
+        const entry: Record<string, unknown> = { type: eventType, symbol };
+        if (eventType === "Order") entry.source = ORDER_SOURCE;
+        if (eventType === "Candle") {
+          entry.fromTime = 10000000000; // request historical candles
+          entry.instrumentType = "equity";
+        }
+        return entry;
+      });
+
+      const msg: Record<string, unknown> = {
         type: "FEED_SUBSCRIPTION",
         channel: state.channel,
-        add: newSymbols.map((symbol) => ({ type: eventType, symbol })),
-      });
+        add: addEntries,
+      };
+      if (!state.initialized) {
+        msg.reset = true;
+        state.initialized = true;
+      }
+      this.client.send(msg);
     }
 
     return state.channel;
@@ -94,10 +134,15 @@ export class DxLinkFeed {
 
     for (const s of toRemove) state.symbols.delete(s);
 
+    const removeEntries =
+      eventType === "Order"
+        ? toRemove.map((symbol) => ({ type: eventType, symbol, source: ORDER_SOURCE }))
+        : toRemove.map((symbol) => ({ type: eventType, symbol }));
+
     this.client.send({
       type: "FEED_SUBSCRIPTION",
       channel: state.channel,
-      remove: toRemove.map((symbol) => ({ type: eventType, symbol })),
+      remove: removeEntries,
     });
   }
 
@@ -121,39 +166,11 @@ export class DxLinkFeed {
     this.channels.clear();
   }
 
-  /**
-   * Parse COMPACT FEED_DATA.
-   *
-   * Format: [eventType, [val1, val2, ...], [val1, val2, ...], ...]
-   * Each array after the event type string is one event, with values
-   * in the field order from FEED_CONFIG.
-   */
-  private parseCompactData(data: unknown[], fields: string[]): Array<Record<string, unknown>> {
-    const events: Array<Record<string, unknown>> = [];
-    let i = 0;
-
-    while (i < data.length) {
-      // Skip event type markers (strings)
-      if (typeof data[i] === "string") {
-        i++;
-        continue;
-      }
-
-      // Each event is an array of values
-      if (Array.isArray(data[i])) {
-        const values = data[i] as unknown[];
-        const event: Record<string, unknown> = {};
-        for (let j = 0; j < fields.length && j < values.length; j++) {
-          const fieldName = fields[j];
-          if (fieldName !== undefined) {
-            event[fieldName] = values[j];
-          }
-        }
-        events.push(event);
-      }
-      i++;
-    }
-    return events;
+  /** Parse FULL FEED_DATA — array of keyed objects. */
+  private parseFullData(data: unknown[]): Array<Record<string, unknown>> {
+    return data.filter(
+      (item): item is Record<string, unknown> => typeof item === "object" && item !== null,
+    );
   }
 
   private handleMessage = (msg: Record<string, unknown>): void => {
@@ -163,10 +180,9 @@ export class DxLinkFeed {
     const data = msg.data as unknown[];
     if (!data || !Array.isArray(data)) return;
 
-    // Find which channel state this belongs to
     for (const state of this.channels.values()) {
       if (state.channel === channel) {
-        const events = this.parseCompactData(data, state.fields);
+        const events = this.parseFullData(data);
         for (const cb of state.callbacks) {
           cb(events);
         }

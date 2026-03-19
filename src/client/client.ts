@@ -110,6 +110,7 @@ export class RobinhoodClient {
       return (await requestGet(this._session, urls.account(accountNumber))) as Account;
     }
     const accounts = await this.getAccounts();
+    if (accounts.length === 0) throw new NotFoundError("No brokerage account found");
     return accounts[0] as Account;
   }
 
@@ -168,12 +169,10 @@ export class RobinhoodClient {
 
     if (positions.length === 0) return {};
 
-    // Resolve instruments and quotes in parallel per position
-    const instruments: Instrument[] = [];
-    for (const pos of positions) {
-      const inst = await this.getInstrumentByUrl(pos.instrument);
-      instruments.push(inst);
-    }
+    // Resolve all instruments concurrently
+    const instruments = await Promise.all(
+      positions.map((pos) => this.getInstrumentByUrl(pos.instrument)),
+    );
 
     const symbolList = instruments.map((i) => i.symbol);
     const quotes = await this.getQuotes(symbolList);
@@ -425,15 +424,12 @@ export class RobinhoodClient {
     });
     if (options.length === 0) return [];
 
-    const results: OptionMarketData[] = [];
-    for (const opt of options) {
-      const data = (await requestGet(
-        this._session,
-        urls.optionMarketData(opt.id),
-      )) as OptionMarketData;
-      results.push(data);
-    }
-    return results;
+    return Promise.all(
+      options.map(
+        (opt) =>
+          requestGet(this._session, urls.optionMarketData(opt.id)) as Promise<OptionMarketData>,
+      ),
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -795,11 +791,7 @@ export class RobinhoodClient {
     const data = (await requestGet(this._session, urls.topMovers())) as {
       instruments: string[];
     };
-    const results: Instrument[] = [];
-    for (const url of data.instruments ?? []) {
-      results.push(await this.getInstrumentByUrl(url));
-    }
-    return results;
+    return Promise.all((data.instruments ?? []).map((url) => this.getInstrumentByUrl(url)));
   }
 
   async getTopMoversSp500(direction: "up" | "down"): Promise<Instrument[]> {
@@ -815,11 +807,7 @@ export class RobinhoodClient {
     const data = (await requestGet(this._session, urls.top100())) as {
       instruments: string[];
     };
-    const results: Instrument[] = [];
-    for (const url of data.instruments ?? []) {
-      results.push(await this.getInstrumentByUrl(url));
-    }
-    return results;
+    return Promise.all((data.instruments ?? []).map((url) => this.getInstrumentByUrl(url)));
   }
 
   async findInstruments(query: string): Promise<Instrument[]> {
@@ -835,11 +823,7 @@ export class RobinhoodClient {
     const data = (await requestGet(this._session, urls.tags(tag))) as {
       instruments: string[];
     };
-    const results: Instrument[] = [];
-    for (const url of data.instruments ?? []) {
-      results.push(await this.getInstrumentByUrl(url));
-    }
-    return results;
+    return Promise.all((data.instruments ?? []).map((url) => this.getInstrumentByUrl(url)));
   }
 }
 

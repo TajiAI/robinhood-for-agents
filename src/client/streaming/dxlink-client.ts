@@ -2,7 +2,7 @@
 
 import { StreamingConnectionError, StreamingProtocolError } from "./errors.js";
 
-const DXLINK_VERSION = "0.1-js/1.0.0";
+const DXLINK_VERSION = "0.1-DXF-JS/0.5.1";
 const DEFAULT_KEEPALIVE_TIMEOUT = 60; // seconds
 
 type MessageHandler = (msg: Record<string, unknown>) => void;
@@ -61,13 +61,37 @@ export class DxLinkClient {
 
   /**
    * Connect to the dxLink WebSocket endpoint and perform handshake.
-   * Resolves once AUTH_STATE = AUTHORIZED.
+   * Resolves once AUTH_STATE = AUTHORIZED. Rejects on timeout or auth failure.
+   *
+   * @param opts.headers — HTTP headers for the WebSocket upgrade request
+   *   (e.g. Authorization for Robinhood's gateway).
    */
-  async connect(wssUrl: string, token: string): Promise<void> {
+  async connect(
+    wssUrl: string,
+    token: string,
+    opts?: { headers?: Record<string, string> },
+  ): Promise<void> {
     return new Promise<void>((resolve, reject) => {
-      const ws = new WebSocket(wssUrl);
-      this.ws = ws;
+      let settled = false;
+      const settle = (fn: () => void) => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          fn();
+        }
+      };
 
+      const timer = setTimeout(() => {
+        settle(() => {
+          this.disconnect();
+          reject(new StreamingConnectionError("Connection timed out"));
+        });
+      }, 15_000);
+
+      const ws = opts?.headers
+        ? new WebSocket(wssUrl, { headers: opts.headers } as unknown as string)
+        : new WebSocket(wssUrl);
+      this.ws = ws;
       ws.onopen = () => {
         // Step 1: Send SETUP
         this.send({
@@ -95,13 +119,18 @@ export class DxLinkClient {
           this.send({ type: "AUTH", channel: 0, token });
         } else if (msg.type === "AUTH_STATE" && msg.channel === 0) {
           if (msg.state === "AUTHORIZED") {
-            this._connected = true;
-            this.startKeepalive();
-            resolve();
+            settle(() => {
+              this._connected = true;
+              this.startKeepalive();
+              resolve();
+            });
           }
-          // UNAUTHORIZED before AUTHORIZED is expected (initial state)
+          // UNAUTHORIZED before AUTHORIZED is expected (initial state);
+          // actual auth failure is caught by the 15s connect timeout.
         } else if (msg.type === "ERROR" && msg.channel === 0) {
-          reject(new StreamingProtocolError(`dxLink error: ${msg.error} — ${msg.message}`));
+          settle(() => {
+            reject(new StreamingProtocolError(`dxLink error: ${msg.error} — ${msg.message}`));
+          });
         }
       };
 
@@ -110,7 +139,7 @@ export class DxLinkClient {
           `WebSocket error: ${(event as ErrorEvent).message ?? "unknown"}`,
         );
         for (const h of this.errorHandlers) h(err);
-        reject(err);
+        settle(() => reject(err));
       };
 
       ws.onclose = () => {
@@ -122,6 +151,7 @@ export class DxLinkClient {
           w.reject(new StreamingConnectionError("WebSocket closed"));
         }
         this.waiters = [];
+        settle(() => reject(new StreamingConnectionError("WebSocket closed during handshake")));
       };
     });
   }
@@ -144,7 +174,7 @@ export class DxLinkClient {
       type: "CHANNEL_REQUEST",
       channel,
       service,
-      parameters: {},
+      parameters: { contract: "AUTO" },
     });
 
     // Wait for CHANNEL_OPENED
