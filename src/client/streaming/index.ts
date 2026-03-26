@@ -5,6 +5,12 @@ import { DxLinkClient } from "./dxlink-client.js";
 import { DxLinkFeed } from "./feed.js";
 import { OrderBook, type OrderBookSnapshot } from "./order-book.js";
 import { StreamingAuth } from "./streaming-auth.js";
+import { Subscription } from "./subscription.js";
+import {
+  type CandleEvent,
+  type SubscribeOptions,
+  resolveSubscribeOptions,
+} from "./types.js";
 
 export { DxLinkClient } from "./dxlink-client.js";
 export {
@@ -17,6 +23,7 @@ export { DxLinkFeed } from "./feed.js";
 export type { OrderBookLevel, OrderBookSnapshot } from "./order-book.js";
 export { OrderBook } from "./order-book.js";
 export { StreamingAuth } from "./streaming-auth.js";
+export { Subscription } from "./subscription.js";
 export type {
   CandleEvent,
   CandleOptions,
@@ -45,6 +52,7 @@ export class StreamingManager {
   private auth: StreamingAuth;
   private session: RobinhoodSession;
   private books = new Map<string, OrderBook>();
+  private subscriptions = new Map<string, Subscription>();
   private reconnectAttempts = 0;
   private reconnecting = false;
 
@@ -77,6 +85,49 @@ export class StreamingManager {
     this.client = client;
     this.feed = new DxLinkFeed(client);
     this.reconnectAttempts = 0;
+  }
+
+  /**
+   * Subscribe to streaming events for a symbol.
+   * Returns a Subscription that owns buffers and callbacks.
+   */
+  async subscribe(symbol: string, opts: SubscribeOptions): Promise<Subscription> {
+    const upper = symbol.toUpperCase();
+    if (this.subscriptions.has(upper)) {
+      throw new Error(
+        `Already subscribed to ${upper}. Call unsubscribe() first or use setInterval() to change candle params.`,
+      );
+    }
+
+    await this.ensureConnected();
+
+    const resolved = resolveSubscribeOptions(opts);
+    const sub = new Subscription(upper, resolved, this.feed!, () =>
+      this.subscriptions.delete(upper),
+    );
+    this.subscriptions.set(upper, sub);
+    await sub.start();
+    return sub;
+  }
+
+  /**
+   * One-shot: connect, collect historical candle backfill, return, disconnect.
+   * Convenience for programmatic consumers that just want data.
+   */
+  async getHistoricalCandles(
+    symbol: string,
+    opts?: { interval?: string; from?: Date | string },
+  ): Promise<CandleEvent[]> {
+    const sub = await this.subscribe(symbol, {
+      candles: {
+        interval: opts?.interval ?? "5m",
+        from: opts?.from,
+      },
+    });
+    await sub.waitForBackfill();
+    const candles = sub.getCandles();
+    sub.unsubscribe();
+    return candles;
   }
 
   /**
@@ -126,6 +177,9 @@ export class StreamingManager {
 
   /** Disconnect and clean up all state. */
   disconnect(): void {
+    for (const sub of this.subscriptions.values()) {
+      sub.unsubscribe();
+    }
     this.feed?.destroy();
     this.feed = null;
     this.client?.disconnect();
@@ -201,6 +255,11 @@ export class StreamingManager {
               }
             });
           }
+        }
+
+        // Re-subscribe all Subscriptions
+        for (const sub of this.subscriptions.values()) {
+          await sub.resubscribe(this.feed!);
         }
 
         this.reconnectAttempts = 0;
