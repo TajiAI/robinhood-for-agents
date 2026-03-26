@@ -6,11 +6,7 @@ import { DxLinkFeed } from "./feed.js";
 import { OrderBook, type OrderBookSnapshot } from "./order-book.js";
 import { StreamingAuth } from "./streaming-auth.js";
 import { Subscription } from "./subscription.js";
-import {
-  type CandleEvent,
-  type SubscribeOptions,
-  resolveSubscribeOptions,
-} from "./types.js";
+import { type CandleEvent, resolveSubscribeOptions, type SubscribeOptions } from "./types.js";
 
 export { DxLinkClient } from "./dxlink-client.js";
 export {

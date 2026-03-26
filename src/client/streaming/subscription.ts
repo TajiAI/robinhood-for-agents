@@ -3,12 +3,7 @@
 import { CandleBuffer } from "./candle-buffer.js";
 import { OrderBook, type OrderBookSnapshot } from "./order-book.js";
 import { RingBuffer } from "./ring-buffer.js";
-import type {
-  CandleEvent,
-  QuoteEvent,
-  ResolvedSubscribeOptions,
-  TradeEvent,
-} from "./types.js";
+import type { CandleEvent, QuoteEvent, ResolvedSubscribeOptions, TradeEvent } from "./types.js";
 
 type EventCallback = (events: Array<Record<string, unknown>>) => void;
 
@@ -50,12 +45,7 @@ export class Subscription {
   private feedQuoteCb: EventCallback = (evts) => this.handleQuoteEvents(evts);
   private feedOrderCb: EventCallback = (evts) => this.handleOrderEvents(evts);
 
-  constructor(
-    symbol: string,
-    opts: ResolvedSubscribeOptions,
-    feed: Feed,
-    onDispose: () => void,
-  ) {
+  constructor(symbol: string, opts: ResolvedSubscribeOptions, feed: Feed, onDispose: () => void) {
     this.symbol = symbol;
     this.opts = opts;
     this.feed = feed;
@@ -112,13 +102,11 @@ export class Subscription {
     else if (event === "quote") this.quoteListeners.push(cb as QuoteListener);
   }
 
+  // biome-ignore lint/complexity/noBannedTypes: callback identity comparison
   off(event: "candle" | "trade" | "quote", cb: Function): void {
-    if (event === "candle")
-      this.candleListeners = this.candleListeners.filter((c) => c !== cb);
-    else if (event === "trade")
-      this.tradeListeners = this.tradeListeners.filter((c) => c !== cb);
-    else if (event === "quote")
-      this.quoteListeners = this.quoteListeners.filter((c) => c !== cb);
+    if (event === "candle") this.candleListeners = this.candleListeners.filter((c) => c !== cb);
+    else if (event === "trade") this.tradeListeners = this.tradeListeners.filter((c) => c !== cb);
+    else if (event === "quote") this.quoteListeners = this.quoteListeners.filter((c) => c !== cb);
   }
 
   // --- Pull: accumulated state ---
@@ -160,7 +148,7 @@ export class Subscription {
     await this.feed.subscribe("Candle", [newSym], this.feedCandleCb, {
       fromTime: this.opts.candles.fromTime,
     });
-    this.candleBuffer!.clear();
+    this.candleBuffer?.clear();
     this.feed.unsubscribe("Candle", [oldSym]);
   }
 

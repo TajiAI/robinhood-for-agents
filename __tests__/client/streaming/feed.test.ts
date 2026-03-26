@@ -187,9 +187,21 @@ describe("DxLinkFeed", () => {
       dataFormat: "FULL",
       eventFields: {
         Candle: [
-          "close", "eventFlags", "eventSymbol", "eventType", "eventTime",
-          "high", "impVolatility", "low", "open", "openInterest",
-          "time", "volume", "vwap", "sequence", "count",
+          "close",
+          "eventFlags",
+          "eventSymbol",
+          "eventType",
+          "eventTime",
+          "high",
+          "impVolatility",
+          "low",
+          "open",
+          "openInterest",
+          "time",
+          "volume",
+          "vwap",
+          "sequence",
+          "count",
         ],
       },
     });
@@ -205,7 +217,7 @@ describe("DxLinkFeed", () => {
       return msg.type === "FEED_SUBSCRIPTION";
     });
     expect(subCall).toBeDefined();
-    const addEntries = (subCall![0] as Record<string, unknown>).add as Array<
+    const addEntries = (subCall?.[0] as Record<string, unknown>).add as Array<
       Record<string, unknown>
     >;
     expect(addEntries[0]).toMatchObject({
@@ -224,9 +236,21 @@ describe("DxLinkFeed", () => {
       dataFormat: "FULL",
       eventFields: {
         Candle: [
-          "close", "eventFlags", "eventSymbol", "eventType", "eventTime",
-          "high", "impVolatility", "low", "open", "openInterest",
-          "time", "volume", "vwap", "sequence", "count",
+          "close",
+          "eventFlags",
+          "eventSymbol",
+          "eventType",
+          "eventTime",
+          "high",
+          "impVolatility",
+          "low",
+          "open",
+          "openInterest",
+          "time",
+          "volume",
+          "vwap",
+          "sequence",
+          "count",
         ],
       },
     });
@@ -238,10 +262,10 @@ describe("DxLinkFeed", () => {
       const msg = c[0] as Record<string, unknown>;
       return msg.type === "FEED_SUBSCRIPTION";
     });
-    const addEntries = (subCall![0] as Record<string, unknown>).add as Array<
+    const addEntries = (subCall?.[0] as Record<string, unknown>).add as Array<
       Record<string, unknown>
     >;
-    expect(addEntries[0]!.fromTime).toBe(10000000000);
+    expect(addEntries[0]?.fromTime).toBe(10000000000);
   });
 
   it("does not duplicate callbacks on repeated subscribe calls", async () => {

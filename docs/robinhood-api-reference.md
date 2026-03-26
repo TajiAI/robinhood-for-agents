@@ -388,13 +388,15 @@ Client                                    Server
 ```
 
 **AUTH_STATE (server -> client):**
+
+The server sends two AUTH_STATE messages in quick succession during token validation — first `UNAUTHORIZED`, then `AUTHORIZED`. Wait for the `AUTHORIZED` state before opening channels.
+
 ```json
-{
-  "type": "AUTH_STATE",
-  "channel": 0,
-  "state": "AUTHORIZED"
-}
+{"type": "AUTH_STATE", "channel": 0, "state": "UNAUTHORIZED"}
+{"type": "AUTH_STATE", "channel": 0, "state": "AUTHORIZED"}
 ```
+
+**Server SETUP response** includes `"version": "1.0-2.2.3"` and `"source": "rh_md"` (observed from HAR, March 2026).
 
 **CHANNEL_REQUEST (client -> server):**
 ```json
@@ -507,8 +509,37 @@ Different event types require additional fields in each `add` entry:
 | Candle | `fromTime`, `instrumentType` | `{ "type": "Candle", "symbol": "AAPL{=5m,tho=false,a=m}", "fromTime": 10000000000, "instrumentType": "equity" }` |
 
 - **Order `source: "NTV"`**: NASDAQ TotalView. Without this, the server returns no L2 data. The `source` must also be included in `remove` entries when unsubscribing.
-- **Candle `fromTime: 10000000000`**: Requests historical candle backfill alongside the live stream.
-- **Candle `instrumentType: "equity"`**: Required for equity candles.
+- **Candle `fromTime: 10000000000`**: Requests historical candle backfill alongside the live stream. Must also be included in `remove` entries when unsubscribing.
+- **Candle `instrumentType: "equity"`**: Required for equity candles. Must also be included in `remove` entries when unsubscribing.
+
+**Changing candle interval (observed from Legend):**
+
+To switch candle timeframes (e.g., 5m → 2m), Legend reuses the existing Candle channel and swaps subscriptions. The sequence:
+
+1. **Add** the new interval subscription (no `reset`):
+```json
+{
+  "channel": 7,
+  "type": "FEED_SUBSCRIPTION",
+  "add": [{ "fromTime": 10000000000, "instrumentType": "equity", "symbol": "NFLX{=2m,tho=false,a=m}", "type": "Candle" }]
+}
+```
+
+2. **Remove** the old interval subscription (~30s later):
+```json
+{
+  "channel": 7,
+  "type": "FEED_SUBSCRIPTION",
+  "remove": [{ "fromTime": 10000000000, "instrumentType": "equity", "symbol": "NFLX{=5m,tho=false,a=m}", "type": "Candle" }]
+}
+```
+
+Key observations:
+- The channel stays open — no need to close/reopen or re-send FEED_SETUP.
+- `reset: true` is only sent on the **first** subscription for the channel, never on interval changes.
+- `remove` entries must include `fromTime` and `instrumentType` (mirroring `add`).
+- Legend adds the new interval before removing the old, ensuring no gap in data delivery.
+- Only the Candle subscription changes — Trade, Quote, and Order feeds continue uninterrupted on their own channels.
 
 **Multi-asset symbol formats:**
 
@@ -517,12 +548,22 @@ Different event types require additional fields in each `add` entry:
 | Equity | Ticker | `SPY`, `AAPL`, `NFLX` |
 | Crypto | `{base}/{quote}:{exchange}` | `DOGE/USD:CXBITS`, `BTC/USD:CXBITS` |
 | Options | `.{underlying}{expiry}{type}{strike}` | `.NFLX260618C95`, `.AAPL260620P200` |
-| Candle | `{symbol}{={period},tho={bool},a={agg}}` | `SPY{=5m,tho=false,a=m}` |
+| Candle (equity) | `{symbol}{={period},tho={bool},a={agg}}` | `SPY{=5m,tho=false,a=m}` |
+| Candle (options) | `{option_symbol}{={period},a={agg},price=mark}` | `.SPXW260323C6570{=2m,a=m,price=mark}` |
 
 Candle symbol format breakdown:
-- `=5m` — candle period (1m, 2m, 5m, 30m, 1h, 1d, etc.)
-- `tho=false` — trade history only; `false` = include extended hours data
+- `=5m` — candle period (1m, 2m, 5m, 30s, 1h, 1d, etc.)
+- `tho=false` — trade history only; `false` = include extended hours data (equity only)
 - `a=m` — aggregation mode; `m` = market
+- `price=mark` — use mark price for options candles (replaces `tho` parameter)
+
+**Options candle differences:**
+- Options use `price=mark` instead of `tho=false` — they chart the mark (mid) price, not last trade
+- `volume`, `impVolatility`, and `openInterest` return as the string `"NaN"` (not null or number)
+- `eventTime: 0` on all historical backfill candles; only the live candle gets a real timestamp
+- `eventFlags: 4` (TX_PENDING) on the most recent candle indicates it's still accumulating
+- Candles arrive newest-first in the initial backfill batch
+- Options candles open on a separate channel from equity candles
 
 **FEED_DATA (server -> client, FULL format):**
 
@@ -616,11 +657,11 @@ The browser web UI authenticates via httpOnly cookies, but programmatic clients 
 
 #### Legend Channel Layout (from HAR telemetry)
 
-Robinhood Legend opens **one FEED channel per event type** on a single WebSocket connection. For a symbol like SPY:
+Robinhood Legend opens **one FEED channel per event type** on a single WebSocket connection. Channel assignment depends on subscription order — the first CHANNEL_REQUEST gets channel 1, second gets 3, etc. For NFLX viewed from a chart widget:
 
 | Channel | Event Type | Symbol Format | Unsub Timeout | Purpose |
 |---------|-----------|---------------|---------------|---------|
-| 1 | **Trade** | `SPY` | 30,000ms | Last trade price, size, tick direction |
+| 1 | **Candle** | `NFLX{=2m,tho=false,a=m}` | 30,000ms | 2-min OHLCV candles for chart |
 | 3 | **TradeETH** | `SPY` | 30,000ms | Extended-hours trade price |
 | 5 | **Quote** | `SPY` | 30,000ms | NBBO bid/ask price + size |
 | 7 | **Candle** | `SPY{=5m,tho=false,a=m}` | 30,000ms | 5-min OHLCV candles for chart |
@@ -1479,6 +1520,37 @@ Not all interval-span combinations are valid:
 | `year` | `day`, `week` |
 | `5year` | `week` |
 | `all` | `week` |
+
+### Streaming Historical Candles (dxFeed WebSocket)
+
+The REST historicals endpoint limits 5-minute candles to ~1 week. For deeper history (~6 weeks of 5-minute data), use the dxFeed WebSocket streaming API via `StreamingManager`:
+
+```typescript
+import { getClient } from "robinhood-for-agents";
+import { getStreamingManager } from "robinhood-for-agents/streaming";
+
+const client = getClient();
+await client.restoreSession();
+
+const streaming = getStreamingManager(client._session);
+
+// One-shot: get all available 5-minute candles (~6 weeks)
+const candles = await streaming.getHistoricalCandles("NFLX", {
+  interval: "5m",
+  from: "30d",   // optional: limit to last 30 days
+});
+
+// Or subscribe for live updates + backfill
+const sub = await streaming.subscribe("NFLX", {
+  candles: { interval: "5m" },
+  quotes: true,
+  trades: true,
+});
+await sub.waitForBackfill();
+console.log(sub.getCandles().length, "candles loaded");
+```
+
+The streaming API provides candle data via the dxFeed `Candle` event type with `fromTime` backfill. Available intervals: `1m`, `2m`, `5m`, `30m`, `1h`, `1d`. Server provides ~6 weeks of history for intraday intervals.
 
 ---
 

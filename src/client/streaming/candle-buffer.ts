@@ -114,7 +114,7 @@ export class CandleBuffer {
   private rebuildIndex(): void {
     this.index.clear();
     for (let i = 0; i < this.items.length; i++) {
-      this.index.set(this.items[i]!.time, i);
+      this.index.set(this.items[i]?.time, i);
     }
   }
 

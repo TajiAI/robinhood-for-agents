@@ -11,7 +11,9 @@ function createMockFeed() {
   };
 }
 
-function candleOpts(overrides?: Partial<ResolvedSubscribeOptions["candles"]>): ResolvedSubscribeOptions {
+function candleOpts(
+  overrides?: Partial<ResolvedSubscribeOptions["candles"]>,
+): ResolvedSubscribeOptions {
   return {
     candles: { interval: "5m", fromTime: 10000000000, maxCandles: 5000, ...overrides },
     quotes: false,
@@ -66,14 +68,34 @@ describe("Subscription", () => {
     sub.on("candle", candleCb);
 
     // Get the feed callback that was registered
-    const feedCb = feed.subscribe.mock.calls[0]![2] as (
+    const feedCb = feed.subscribe.mock.calls[0]?.[2] as (
       events: Array<Record<string, unknown>>,
     ) => void;
 
     // Simulate backfill candles
     feedCb([
-      { time: 2000, open: 102, high: 103, low: 101, close: 102.5, volume: 500, count: 20, vwap: 102, eventTime: 0 },
-      { time: 1000, open: 100, high: 101, low: 99, close: 100.5, volume: 1000, count: 50, vwap: 100, eventTime: 0 },
+      {
+        time: 2000,
+        open: 102,
+        high: 103,
+        low: 101,
+        close: 102.5,
+        volume: 500,
+        count: 20,
+        vwap: 102,
+        eventTime: 0,
+      },
+      {
+        time: 1000,
+        open: 100,
+        high: 101,
+        low: 99,
+        close: 100.5,
+        volume: 1000,
+        count: 50,
+        vwap: 100,
+        eventTime: 0,
+      },
     ]);
 
     expect(candleCb).toHaveBeenCalledTimes(2);
@@ -132,21 +154,51 @@ describe("Subscription", () => {
     await sub.start();
 
     // Get the Trade feed callback
-    const tradeFeedCb = feed.subscribe.mock.calls.find(
-      (c: unknown[]) => c[0] === "Trade",
-    )![2] as (events: Array<Record<string, unknown>>) => void;
+    const tradeFeedCb = feed.subscribe.mock.calls.find((c: unknown[]) => c[0] === "Trade")?.[2] as (
+      events: Array<Record<string, unknown>>,
+    ) => void;
 
     tradeFeedCb([
-      { eventSymbol: "NFLX", eventType: "Trade", price: 100, size: 10, eventTime: 1, change: 0, dayVolume: 0, exchangeCode: "", tickDirection: "" },
-      { eventSymbol: "NFLX", eventType: "Trade", price: 101, size: 20, eventTime: 2, change: 1, dayVolume: 0, exchangeCode: "", tickDirection: "" },
-      { eventSymbol: "NFLX", eventType: "Trade", price: 102, size: 30, eventTime: 3, change: 1, dayVolume: 0, exchangeCode: "", tickDirection: "" },
+      {
+        eventSymbol: "NFLX",
+        eventType: "Trade",
+        price: 100,
+        size: 10,
+        eventTime: 1,
+        change: 0,
+        dayVolume: 0,
+        exchangeCode: "",
+        tickDirection: "",
+      },
+      {
+        eventSymbol: "NFLX",
+        eventType: "Trade",
+        price: 101,
+        size: 20,
+        eventTime: 2,
+        change: 1,
+        dayVolume: 0,
+        exchangeCode: "",
+        tickDirection: "",
+      },
+      {
+        eventSymbol: "NFLX",
+        eventType: "Trade",
+        price: 102,
+        size: 30,
+        eventTime: 3,
+        change: 1,
+        dayVolume: 0,
+        exchangeCode: "",
+        tickDirection: "",
+      },
     ]);
 
     // maxTrades=2, so oldest evicted
     const trades = sub.getTrades();
     expect(trades).toHaveLength(2);
-    expect(trades[0]!.price).toBe(101);
-    expect(trades[1]!.price).toBe(102);
+    expect(trades[0]?.price).toBe(101);
+    expect(trades[1]?.price).toBe(102);
   });
 
   it("quote events store latest only", async () => {
@@ -161,13 +213,37 @@ describe("Subscription", () => {
     const sub = new Subscription("NFLX", opts, feed as any, vi.fn());
     await sub.start();
 
-    const quoteFeedCb = feed.subscribe.mock.calls.find(
-      (c: unknown[]) => c[0] === "Quote",
-    )![2] as (events: Array<Record<string, unknown>>) => void;
+    const quoteFeedCb = feed.subscribe.mock.calls.find((c: unknown[]) => c[0] === "Quote")?.[2] as (
+      events: Array<Record<string, unknown>>,
+    ) => void;
 
     quoteFeedCb([
-      { eventSymbol: "NFLX", eventType: "Quote", bidPrice: 100, askPrice: 101, bidSize: 10, askSize: 20, bidExchangeCode: "", askExchangeCode: "", bidTime: 0, askTime: 0, eventTime: 0 },
-      { eventSymbol: "NFLX", eventType: "Quote", bidPrice: 102, askPrice: 103, bidSize: 30, askSize: 40, bidExchangeCode: "", askExchangeCode: "", bidTime: 0, askTime: 0, eventTime: 0 },
+      {
+        eventSymbol: "NFLX",
+        eventType: "Quote",
+        bidPrice: 100,
+        askPrice: 101,
+        bidSize: 10,
+        askSize: 20,
+        bidExchangeCode: "",
+        askExchangeCode: "",
+        bidTime: 0,
+        askTime: 0,
+        eventTime: 0,
+      },
+      {
+        eventSymbol: "NFLX",
+        eventType: "Quote",
+        bidPrice: 102,
+        askPrice: 103,
+        bidSize: 30,
+        askSize: 40,
+        bidExchangeCode: "",
+        askExchangeCode: "",
+        bidTime: 0,
+        askTime: 0,
+        eventTime: 0,
+      },
     ]);
 
     const quote = sub.getLatestQuote();

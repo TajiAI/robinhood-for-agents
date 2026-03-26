@@ -47,7 +47,7 @@ describe("CandleBuffer", () => {
     expect(buf.length).toBe(1);
 
     buf.finalizeBackfill();
-    expect(buf.getCandles()[0]!.open).toBe(200); // last write wins
+    expect(buf.getCandles()[0]?.open).toBe(200); // last write wins
   });
 
   it("transitions from backfill to live when eventTime > 0", () => {
@@ -68,7 +68,7 @@ describe("CandleBuffer", () => {
     buf.insert(makeCandle(1000, 100));
     buf.insert(makeCandle(1000, 200)); // update
     expect(buf.length).toBe(1);
-    expect(buf.getCandles()[0]!.open).toBe(200);
+    expect(buf.getCandles()[0]?.open).toBe(200);
   });
 
   it("evicts oldest candle when exceeding maxCandles during live", () => {
@@ -150,7 +150,7 @@ describe("resolveFromTime", () => {
   });
 
   it("throws on invalid format", () => {
-    expect(() => resolveFromTime("30m")).toThrow('Invalid from duration');
-    expect(() => resolveFromTime("abc")).toThrow('Invalid from duration');
+    expect(() => resolveFromTime("30m")).toThrow("Invalid from duration");
+    expect(() => resolveFromTime("abc")).toThrow("Invalid from duration");
   });
 });

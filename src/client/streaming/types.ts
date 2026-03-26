@@ -221,7 +221,7 @@ export interface TradeEvent {
 
 /** A parsed Candle event from FEED_DATA. */
 export interface CandleEvent {
-  time: number;       // Candle period start (epoch ms)
+  time: number; // Candle period start (epoch ms)
   open: number;
   high: number;
   low: number;
@@ -229,7 +229,7 @@ export interface CandleEvent {
   volume: number;
   count: number;
   vwap: number;
-  eventTime: number;  // 0 for backfill, real timestamp for live
+  eventTime: number; // 0 for backfill, real timestamp for live
 }
 
 // ---------------------------------------------------------------------------
