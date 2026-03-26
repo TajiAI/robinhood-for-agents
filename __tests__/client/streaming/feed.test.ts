@@ -178,4 +178,89 @@ describe("DxLinkFeed", () => {
     mock.simulateMessage({ type: "KEEPALIVE", channel: 0 });
     expect(callback).not.toHaveBeenCalled();
   });
+
+  it("sends custom fromTime for Candle subscriptions", async () => {
+    const mock = createMockClient();
+    mock.waitFor = vi.fn().mockResolvedValue({
+      type: "FEED_CONFIG",
+      channel: 3,
+      dataFormat: "FULL",
+      eventFields: {
+        Candle: [
+          "close", "eventFlags", "eventSymbol", "eventType", "eventTime",
+          "high", "impVolatility", "low", "open", "openInterest",
+          "time", "volume", "vwap", "sequence", "count",
+        ],
+      },
+    });
+    // biome-ignore lint/suspicious/noExplicitAny: test mock
+    const feed = new DxLinkFeed(mock as any);
+    const cb = vi.fn();
+    await feed.subscribe("Candle", ["NFLX{=5m,tho=false,a=m}"], cb, {
+      fromTime: 1740000000000,
+    });
+
+    const subCall = mock.send.mock.calls.find((c: unknown[]) => {
+      const msg = c[0] as Record<string, unknown>;
+      return msg.type === "FEED_SUBSCRIPTION";
+    });
+    expect(subCall).toBeDefined();
+    const addEntries = (subCall![0] as Record<string, unknown>).add as Array<
+      Record<string, unknown>
+    >;
+    expect(addEntries[0]).toMatchObject({
+      type: "Candle",
+      symbol: "NFLX{=5m,tho=false,a=m}",
+      fromTime: 1740000000000,
+      instrumentType: "equity",
+    });
+  });
+
+  it("uses default fromTime when opts not provided for Candle", async () => {
+    const mock = createMockClient();
+    mock.waitFor = vi.fn().mockResolvedValue({
+      type: "FEED_CONFIG",
+      channel: 3,
+      dataFormat: "FULL",
+      eventFields: {
+        Candle: [
+          "close", "eventFlags", "eventSymbol", "eventType", "eventTime",
+          "high", "impVolatility", "low", "open", "openInterest",
+          "time", "volume", "vwap", "sequence", "count",
+        ],
+      },
+    });
+    // biome-ignore lint/suspicious/noExplicitAny: test mock
+    const feed = new DxLinkFeed(mock as any);
+    await feed.subscribe("Candle", ["SPY{=5m,tho=false,a=m}"], vi.fn());
+
+    const subCall = mock.send.mock.calls.find((c: unknown[]) => {
+      const msg = c[0] as Record<string, unknown>;
+      return msg.type === "FEED_SUBSCRIPTION";
+    });
+    const addEntries = (subCall![0] as Record<string, unknown>).add as Array<
+      Record<string, unknown>
+    >;
+    expect(addEntries[0]!.fromTime).toBe(10000000000);
+  });
+
+  it("does not duplicate callbacks on repeated subscribe calls", async () => {
+    const mock = createMockClient();
+    // biome-ignore lint/suspicious/noExplicitAny: test mock
+    const feed = new DxLinkFeed(mock as any);
+
+    const cb = vi.fn();
+    await feed.subscribe("Order", ["SPY"], cb);
+    await feed.subscribe("Order", ["AAPL"], cb); // same callback, new symbol
+
+    // Simulate one FEED_DATA event
+    mock.simulateMessage({
+      type: "FEED_DATA",
+      channel: 3,
+      data: [{ eventSymbol: "SPY", eventType: "Order", price: 500 }],
+    });
+
+    // Callback should fire exactly once (not twice from duplicate registration)
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
 });

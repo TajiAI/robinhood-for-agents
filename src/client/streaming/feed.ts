@@ -37,6 +37,7 @@ export class DxLinkFeed {
     eventType: EventType,
     symbols: string[],
     callback: EventCallback,
+    opts?: { fromTime?: number },
   ): Promise<number> {
     let state = this.channels.get(eventType);
 
@@ -91,7 +92,9 @@ export class DxLinkFeed {
       }
     }
 
-    state.callbacks.push(callback);
+    if (!state.callbacks.includes(callback)) {
+      state.callbacks.push(callback);
+    }
 
     // Determine new symbols to subscribe
     const newSymbols = symbols.filter((s) => !state.symbols.has(s));
@@ -103,7 +106,7 @@ export class DxLinkFeed {
         const entry: Record<string, unknown> = { type: eventType, symbol };
         if (eventType === "Order") entry.source = ORDER_SOURCE;
         if (eventType === "Candle") {
-          entry.fromTime = 10000000000; // request historical candles
+          entry.fromTime = opts?.fromTime ?? 10000000000;
           entry.instrumentType = "equity";
         }
         return entry;
@@ -134,10 +137,15 @@ export class DxLinkFeed {
 
     for (const s of toRemove) state.symbols.delete(s);
 
-    const removeEntries =
-      eventType === "Order"
-        ? toRemove.map((symbol) => ({ type: eventType, symbol, source: ORDER_SOURCE }))
-        : toRemove.map((symbol) => ({ type: eventType, symbol }));
+    const removeEntries = toRemove.map((symbol) => {
+      const entry: Record<string, unknown> = { type: eventType, symbol };
+      if (eventType === "Order") entry.source = ORDER_SOURCE;
+      if (eventType === "Candle") {
+        entry.fromTime = 10000000000;
+        entry.instrumentType = "equity";
+      }
+      return entry;
+    });
 
     this.client.send({
       type: "FEED_SUBSCRIPTION",
