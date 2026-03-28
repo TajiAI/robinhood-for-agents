@@ -1,31 +1,68 @@
 #!/usr/bin/env bun
 /**
- * Real-time streaming viewer — candlestick chart + L2 depth + time & sales.
+ * Offline streaming simulation viewer — candlestick chart + L2 depth + time & sales.
+ * Uses generated data instead of real market feeds. No auth or network required.
  *
- * Usage: bun bin/stream-viewer.ts [symbol] [--port 8080]
+ * Usage: bun bin/stream-viewer-sim.ts [symbol] [--port 8080] [--speed 1]
  */
 
-import { RobinhoodClient } from "../src/client/client.js";
-import { DxLinkClient } from "../src/client/streaming/dxlink-client.js";
-import { DxLinkFeed } from "../src/client/streaming/feed.js";
 import { OrderBook } from "../src/client/streaming/order-book.js";
-import { StreamingAuth } from "../src/client/streaming/streaming-auth.js";
+
+// ---------------------------------------------------------------------------
+// CLI
+// ---------------------------------------------------------------------------
 
 const args = process.argv.slice(2);
-let currentSymbol = (args.find((a) => !a.startsWith("-")) ?? "SPY").toUpperCase();
-let currentInterval = "5m";
 const portIdx = args.indexOf("--port");
 const port = portIdx >= 0 ? Number(args[portIdx + 1]) : 8080;
+const speedIdx = args.indexOf("--speed");
+const speed = speedIdx >= 0 ? Number(args[speedIdx + 1]) : 1;
 
-/** Maps UI timeframe to REST API {interval, span} for historical fetch. */
-const TF_TO_REST: Record<string, { interval: string; span: string }> = {
-  "1m": { interval: "5minute", span: "day" },
-  "2m": { interval: "5minute", span: "day" },
-  "5m": { interval: "5minute", span: "day" },
-  "30m": { interval: "hour", span: "week" },
-  "1h": { interval: "hour", span: "month" },
-  "1d": { interval: "day", span: "year" },
+// Skip flag values when finding positional symbol arg
+const flagValues = new Set<number>();
+if (portIdx >= 0) flagValues.add(portIdx + 1);
+if (speedIdx >= 0) flagValues.add(speedIdx + 1);
+let currentSymbol = (
+  args.find((a, i) => !a.startsWith("-") && !flagValues.has(i)) ?? "SPY"
+).toUpperCase();
+let currentInterval = "5m";
+
+/** Maps UI timeframe label → candle step in ms. */
+const TF_TO_STEP: Record<string, number> = {
+  "1m": 60_000,
+  "2m": 120_000,
+  "5m": 300_000,
+  "30m": 1_800_000,
+  "1h": 3_600_000,
+  "1d": 86_400_000,
 };
+
+// ---------------------------------------------------------------------------
+// Hardcoded symbol list
+// ---------------------------------------------------------------------------
+
+const SIM_SYMBOLS = [
+  { symbol: "SPY", name: "SPDR S&P 500 ETF" },
+  { symbol: "QQQ", name: "Invesco QQQ Trust" },
+  { symbol: "AAPL", name: "Apple Inc." },
+  { symbol: "MSFT", name: "Microsoft Corp." },
+  { symbol: "GOOGL", name: "Alphabet Inc." },
+  { symbol: "AMZN", name: "Amazon.com Inc." },
+  { symbol: "NVDA", name: "NVIDIA Corp." },
+  { symbol: "TSLA", name: "Tesla Inc." },
+  { symbol: "META", name: "Meta Platforms Inc." },
+  { symbol: "NFLX", name: "Netflix Inc." },
+  { symbol: "AMD", name: "Advanced Micro Devices" },
+  { symbol: "INTC", name: "Intel Corp." },
+  { symbol: "DIS", name: "Walt Disney Co." },
+  { symbol: "BA", name: "Boeing Co." },
+  { symbol: "JPM", name: "JPMorgan Chase & Co." },
+  { symbol: "V", name: "Visa Inc." },
+  { symbol: "WMT", name: "Walmart Inc." },
+  { symbol: "KO", name: "Coca-Cola Co." },
+  { symbol: "PFE", name: "Pfizer Inc." },
+  { symbol: "XOM", name: "Exxon Mobil Corp." },
+];
 
 // ---------------------------------------------------------------------------
 // State
@@ -79,29 +116,8 @@ function broadcast(event: string, data: unknown) {
 }
 
 // ---------------------------------------------------------------------------
-// Connect & subscribe
+// Callbacks (same as stream-viewer.ts)
 // ---------------------------------------------------------------------------
-
-console.log(`Streaming ${currentSymbol} — authenticating...`);
-const client = new RobinhoodClient();
-await client.restoreSession();
-console.log("Authenticated.");
-
-const auth = new StreamingAuth(client._session);
-const tokenData = await auth.fetchToken();
-const dxClient = new DxLinkClient();
-dxClient.on("close", () => console.error("WebSocket closed"));
-dxClient.on("error", (e) => console.error("WebSocket error:", e.message));
-
-const accessToken = client._session.getAuthTokenForRevocation();
-await dxClient.connect(tokenData.wss_url, tokenData.token, {
-  headers: { Authorization: `Bearer ${accessToken}`, Origin: "https://robinhood.com" },
-});
-console.log("dxLink connected.");
-
-const feed = new DxLinkFeed(dxClient);
-
-// --- Named callbacks (reference currentSymbol, which is mutable) ---
 
 function handleTrade(e: Record<string, unknown>) {
   if (e.eventSymbol !== currentSymbol) return;
@@ -167,101 +183,6 @@ const orderCb = (evts: Array<Record<string, unknown>>) => {
   }
 };
 
-function candleSym(sym: string, tf?: string) {
-  return `${sym}{=${tf ?? currentInterval},tho=false,a=m}`;
-}
-
-async function subscribeSymbol(sym: string) {
-  await feed.subscribe("Trade", [sym], tradeCb);
-  await feed.subscribe("TradeETH", [sym], tradeCb);
-  await feed.subscribe("Quote", [sym], quoteCb);
-  await feed.subscribe("Candle", [candleSym(sym)], candleCb);
-  await feed.subscribe("Order", [sym], orderCb);
-  console.log(`Subscribed to Trade, TradeETH, Quote, Candle, Order for ${sym}`);
-}
-
-function unsubscribeSymbol(sym: string) {
-  feed.removeCallback("Trade", tradeCb);
-  feed.removeCallback("TradeETH", tradeCb);
-  feed.removeCallback("Quote", quoteCb);
-  feed.removeCallback("Candle", candleCb);
-  feed.removeCallback("Order", orderCb);
-  feed.unsubscribe("Trade", [sym]);
-  feed.unsubscribe("TradeETH", [sym]);
-  feed.unsubscribe("Quote", [sym]);
-  feed.unsubscribe("Candle", [candleSym(sym)]);
-  feed.unsubscribe("Order", [sym]);
-}
-
-async function loadHistory(sym: string) {
-  try {
-    const rest = TF_TO_REST[currentInterval] ?? { interval: "5minute", span: "day" };
-    const hist = await client.getStockHistoricals(sym, {
-      interval: rest.interval,
-      span: rest.span,
-      bounds: "regular",
-    });
-    const items = hist?.[0]?.historicals;
-    if (!items) return;
-    let added = 0;
-    for (const h of items) {
-      const c: CandleData = {
-        time: new Date(h.begins_at).getTime(),
-        open: Number(h.open_price),
-        high: Number(h.high_price),
-        low: Number(h.low_price),
-        close: Number(h.close_price),
-        volume: h.volume ?? 0,
-      };
-      if (!c.open || !c.time) continue;
-      const idx = state.candles.findIndex((x) => x.time === c.time);
-      if (idx < 0) {
-        state.candles.push(c);
-        added++;
-      }
-    }
-    if (added > 0) {
-      state.candles.sort((a, b) => a.time - b.time);
-      broadcast("candles", state.candles);
-    }
-    console.log(`Loaded ${added} historical candles for ${sym} (${rest.interval}/${rest.span})`);
-  } catch (e) {
-    console.error("History fetch error:", e);
-  }
-}
-
-async function switchSymbol(newSym: string) {
-  if (newSym === currentSymbol) return;
-  const oldSym = currentSymbol;
-  unsubscribeSymbol(oldSym);
-  currentSymbol = newSym;
-  state.candles = [];
-  state.lastTrade = null;
-  state.quote = null;
-  state.tradeHistory = [];
-  state.book = new OrderBook(currentSymbol, 100);
-  await subscribeSymbol(currentSymbol);
-  await loadHistory(currentSymbol);
-  broadcast("symbolChanged", { symbol: currentSymbol, interval: currentInterval });
-}
-
-async function switchInterval(newTf: string) {
-  if (newTf === currentInterval) return;
-  // Unsubscribe old candle subscription
-  feed.removeCallback("Candle", candleCb);
-  feed.unsubscribe("Candle", [candleSym(currentSymbol)]);
-  currentInterval = newTf;
-  state.candles = [];
-  // Subscribe new candle subscription
-  await feed.subscribe("Candle", [candleSym(currentSymbol)], candleCb);
-  await loadHistory(currentSymbol);
-  broadcast("intervalChanged", { interval: currentInterval });
-  console.log(`Switched to ${currentInterval} candles`);
-}
-
-await subscribeSymbol(currentSymbol);
-await loadHistory(currentSymbol);
-
 // ---------------------------------------------------------------------------
 // L2 price-level aggregation
 // ---------------------------------------------------------------------------
@@ -283,7 +204,6 @@ function aggregateLevels(
 ): { price: number; size: number }[] {
   const buckets = new Map<number, number>();
   for (const l of levels) {
-    // Bids round down, asks round up (bucket toward spread)
     const key =
       side === "bid"
         ? Math.floor(l.price / bucketSize) * bucketSize
@@ -313,14 +233,287 @@ setInterval(() => {
 }, 250);
 
 // ---------------------------------------------------------------------------
-// HTML
+// Price generation — deterministic per symbol
+// ---------------------------------------------------------------------------
+
+function priceForSymbol(sym: string): { base: number; range: number } {
+  const hash = [...sym].reduce((h, c) => h * 31 + c.charCodeAt(0), 0);
+  const base = 50 + (Math.abs(hash) % 900);
+  const range = Math.max(2, base * 0.02);
+  return { base, range };
+}
+
+function generateCandles(sym: string, count: number, step: number, startTime: number): CandleData[] {
+  const { base, range } = priceForSymbol(sym);
+  const candles: CandleData[] = [];
+  let price = base;
+
+  for (let i = 0; i < count; i++) {
+    const drift = (Math.random() - 0.5) * range * 0.4;
+    const open = +(price + drift * 0.3).toFixed(2);
+    const volatility = range * (0.2 + Math.random() * 0.3);
+    const high = +(Math.max(open, open + volatility * Math.random())).toFixed(2);
+    const low = +(Math.min(open, open - volatility * Math.random())).toFixed(2);
+    const close = +(low + Math.random() * (high - low)).toFixed(2);
+    const volume = Math.round(500_000 + Math.random() * 4_500_000);
+
+    candles.push({ time: startTime + i * step, open, high, low, close, volume });
+    price = close;
+  }
+  return candles;
+}
+
+// ---------------------------------------------------------------------------
+// Replay Engine
+// ---------------------------------------------------------------------------
+
+class ReplayEngine {
+  private timers: Timer[] = [];
+  private candleIndex = 0;
+  private lastPrice = 0;
+  private baseTime = 0;
+  private orderIndexCounter = 100_000_000;
+
+  constructor(
+    private symbol: string,
+    private interval: string,
+    private speed: number,
+  ) {}
+
+  start() {
+    const step = TF_TO_STEP[this.interval] ?? 300_000;
+    this.baseTime = Date.now() - 10 * step;
+
+    // Phase 1: Generate initial batch
+    const candles = generateCandles(this.symbol, 10, step, this.baseTime);
+    this.candleIndex = 10;
+    this.lastPrice = candles[candles.length - 1]!.close;
+
+    // Deliver candles via callback
+    candleCb(
+      candles.map((c) => ({
+        eventSymbol: `${this.symbol}{=sim}`,
+        time: c.time,
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close,
+        volume: c.volume,
+      })),
+    );
+
+    // Initial L2 book
+    this.generateBookSnapshot();
+
+    // Initial quote + trade
+    this.generateQuote();
+    this.generateTrade();
+
+    // Phase 2: Live loop
+    // New candle every CANDLE_STEP
+    this.timers.push(
+      setInterval(() => {
+        this.deliverNewCandle(step);
+      }, step / this.speed),
+    );
+
+    // Trade events at ~100ms
+    this.timers.push(
+      setInterval(() => {
+        this.generateTrade();
+      }, 100 / this.speed),
+    );
+
+    // Quote events at ~200ms
+    this.timers.push(
+      setInterval(() => {
+        this.generateQuote();
+      }, 200 / this.speed),
+    );
+
+    // L2 order updates at ~300ms
+    this.timers.push(
+      setInterval(() => {
+        this.generateOrderUpdates();
+      }, 300 / this.speed),
+    );
+  }
+
+  stop() {
+    for (const t of this.timers) clearInterval(t);
+    this.timers = [];
+  }
+
+  restart(symbol: string, interval: string) {
+    this.stop();
+    this.symbol = symbol;
+    this.interval = interval;
+
+    // Reset state
+    state.candles = [];
+    state.lastTrade = null;
+    state.quote = null;
+    state.tradeHistory = [];
+    state.book = new OrderBook(symbol, 100);
+    this.candleIndex = 0;
+    this.orderIndexCounter = 100_000_000;
+
+    this.start();
+  }
+
+  private deliverNewCandle(step: number) {
+    const { range } = priceForSymbol(this.symbol);
+    const drift = (Math.random() - 0.5) * range * 0.3;
+    const open = +(this.lastPrice).toFixed(2);
+    const volatility = range * (0.15 + Math.random() * 0.25);
+    const high = +(Math.max(open, open + volatility * Math.random())).toFixed(2);
+    const low = +(Math.min(open, open - volatility * Math.random())).toFixed(2);
+    const close = +(low + Math.random() * (high - low) + drift).toFixed(2);
+    const clampedClose = +Math.max(low, Math.min(high, close)).toFixed(2);
+    const volume = Math.round(500_000 + Math.random() * 4_500_000);
+    const time = this.baseTime + this.candleIndex * step;
+
+    candleCb([
+      {
+        eventSymbol: `${this.symbol}{=sim}`,
+        time,
+        open,
+        high,
+        low,
+        close: clampedClose,
+        volume,
+      },
+    ]);
+
+    this.lastPrice = clampedClose;
+    this.candleIndex++;
+
+    // Looping: if we've added 10 more candles, shift the base time
+    if (this.candleIndex % 20 === 0) {
+      const { base } = priceForSymbol(this.symbol);
+      // Add slight mean reversion toward base
+      this.lastPrice += (base - this.lastPrice) * 0.05;
+    }
+  }
+
+  private generateTrade() {
+    const { range } = priceForSymbol(this.symbol);
+    const jitter = (Math.random() - 0.5) * range * 0.05;
+    const price = +(this.lastPrice + jitter).toFixed(2);
+    const prevPrice = this.lastPrice;
+    this.lastPrice = price;
+
+    const size = Math.round(10 + Math.random() * 490);
+    const direction = price >= prevPrice ? "UPTICK" : "DOWNTICK";
+    const { base } = priceForSymbol(this.symbol);
+    const change = +(price - base).toFixed(2);
+
+    tradeCb([
+      {
+        eventSymbol: this.symbol,
+        price,
+        size,
+        change,
+        dayVolume: 45_000_000,
+        tickDirection: direction,
+        eventTime: Date.now(),
+      },
+    ]);
+  }
+
+  private generateQuote() {
+    const spread = 0.01 + Math.random() * 0.04;
+    const bidPrice = +(this.lastPrice - spread / 2).toFixed(2);
+    const askPrice = +(this.lastPrice + spread / 2).toFixed(2);
+
+    quoteCb([
+      {
+        eventSymbol: this.symbol,
+        bidPrice,
+        bidSize: 100 + Math.floor(Math.random() * 500),
+        askPrice,
+        askSize: 100 + Math.floor(Math.random() * 500),
+        eventTime: Date.now(),
+      },
+    ]);
+  }
+
+  private generateBookSnapshot() {
+    // Generate 20 bid + 20 ask levels
+    const bucket = getBucketSize(this.lastPrice);
+    for (let i = 0; i < 20; i++) {
+      const bidPrice = +(this.lastPrice - bucket * (i + 1)).toFixed(2);
+      const askPrice = +(this.lastPrice + bucket * (i + 1)).toFixed(2);
+      const bidSize = Math.round(100 + Math.random() * 900);
+      const askSize = Math.round(100 + Math.random() * 900);
+
+      orderCb([
+        {
+          eventSymbol: this.symbol,
+          side: "BUY",
+          price: bidPrice,
+          size: bidSize,
+          index: String(this.orderIndexCounter++),
+          time: Date.now(),
+        },
+      ]);
+      orderCb([
+        {
+          eventSymbol: this.symbol,
+          side: "SELL",
+          price: askPrice,
+          size: askSize,
+          index: String(this.orderIndexCounter++),
+          time: Date.now(),
+        },
+      ]);
+    }
+  }
+
+  private generateOrderUpdates() {
+    const count = 1 + Math.floor(Math.random() * 3);
+    const bucket = getBucketSize(this.lastPrice);
+
+    for (let i = 0; i < count; i++) {
+      const isBid = Math.random() > 0.5;
+      const levelOffset = Math.floor(Math.random() * 20) + 1;
+      const price = isBid
+        ? +(this.lastPrice - bucket * levelOffset).toFixed(2)
+        : +(this.lastPrice + bucket * levelOffset).toFixed(2);
+
+      // 20% chance of removing a level
+      const size = Math.random() < 0.2 ? 0 : Math.round(50 + Math.random() * 800);
+
+      orderCb([
+        {
+          eventSymbol: this.symbol,
+          side: isBid ? "BUY" : "SELL",
+          price,
+          size,
+          index: String(this.orderIndexCounter++),
+          time: Date.now(),
+        },
+      ]);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Start engine
+// ---------------------------------------------------------------------------
+
+const engine = new ReplayEngine(currentSymbol, currentInterval, speed);
+engine.start();
+
+// ---------------------------------------------------------------------------
+// HTML (copied from stream-viewer.ts with SIM badge)
 // ---------------------------------------------------------------------------
 
 function getHTML() {
   return /* html */ `<!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${currentSymbol} Live</title>
+<title>${currentSymbol} SIM</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:#0a0a0c;color:#ccc;font-family:'SF Mono','Fira Code',monospace;font-size:12px;overflow:hidden}
@@ -376,9 +569,11 @@ canvas{position:absolute;top:0;left:0;width:100%;height:100%}
 .search-row .ticker{font-weight:700;color:#fff;width:72px;font-size:14px}
 .search-row .name{color:#666;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .search-empty{padding:20px 16px;color:#444;text-align:center;font-size:13px}
+.sim-badge{background:#ff1744;color:#fff;font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;letter-spacing:1px;margin-left:4px}
 </style></head><body>
 <div class="hdr">
 <button class="sym-btn" id="symBtn"><span class="icon">&#x1F50D;</span><span class="sym" id="symLabel">${currentSymbol}</span></button>
+<span class="sim-badge">SIM</span>
 <div class="tf-bar" id="tfBar">
 <button class="tf" data-tf="1m">1m</button>
 <button class="tf" data-tf="2m">2m</button>
@@ -387,8 +582,8 @@ canvas{position:absolute;top:0;left:0;width:100%;height:100%}
 <button class="tf" data-tf="1h">1H</button>
 <button class="tf" data-tf="1d">1D</button>
 </div>
-<span class="hdr-quote"><span class="b" id="hBid">Bid —</span><span class="sep">|</span><span class="a" id="hAsk">Ask —</span></span>
-<span class="px flat" id="lp">—</span>
+<span class="hdr-quote"><span class="b" id="hBid">Bid \u2014</span><span class="sep">|</span><span class="a" id="hAsk">Ask \u2014</span></span>
+<span class="px flat" id="lp">\u2014</span>
 <span class="chg" id="chg"></span>
 <div class="ohlcv" id="ohlcv"></div>
 <div class="meta"><span id="si"></span><span id="tc">0 trades</span><button class="tf l2-toggle active" id="l2Toggle">L2</button></div>
@@ -399,10 +594,10 @@ canvas{position:absolute;top:0;left:0;width:100%;height:100%}
 <div class="ptitle">L2 Order Book</div>
 <div class="book">
 <div class="bside asks" id="asks"></div>
-<div class="bsp" id="bsp">—</div>
+<div class="bsp" id="bsp">\u2014</div>
 <div class="bside bids" id="bids"></div>
 </div>
-<div class="st" id="st">Connecting...</div>
+<div class="st on" id="st">SIM Mode</div>
 </div>
 </div>
 <div class="search-overlay" id="searchOverlay">
@@ -548,7 +743,7 @@ function draw(){
     ctx.fillText(fT(tc.time),tx,H-pad.b+14);
   }
 
-  // L2 depth overlay (Order book data only, no BBO quote injection)
+  // L2 depth overlay
   if(showL2Overlay&&bookData){
     var bidLevels=[],askLevels=[];
     for(var bi=0;bi<bookData.bids.length;bi++){var bl=bookData.bids[bi];if(bl.size>0)bidLevels.push({price:bl.price,size:bl.size})}
@@ -876,9 +1071,9 @@ cv.addEventListener('touchend',function(){
 // SSE
 const es=new EventSource('/stream');
 document.getElementById('st').className='st on';
-document.getElementById('st').textContent='Connected';
+document.getElementById('st').textContent='SIM Mode';
 es.onerror=()=>{document.getElementById('st').className='st';document.getElementById('st').textContent='Reconnecting...'};
-es.onopen=()=>{document.getElementById('st').className='st on';document.getElementById('st').textContent='Connected'};
+es.onopen=()=>{document.getElementById('st').className='st on';document.getElementById('st').textContent='SIM Mode'};
 
 es.addEventListener('trade',(e)=>{
   const t=JSON.parse(e.data);tradeCount++;
@@ -889,7 +1084,6 @@ es.addEventListener('trade',(e)=>{
   const ce=document.getElementById('chg');ce.textContent=s+f(t.change)+' ('+s+f(t.change/(t.price-t.change)*100,2)+'%)';
   ce.className='chg '+(t.change>=0?'up':'dn');
   document.getElementById('tc').textContent=tradeCount+' trades';
-  // Live candle update — track price in current candle between Candle events
   if(candles.length>0){
     var last=candles[candles.length-1];
     last.close=t.price;
@@ -920,7 +1114,7 @@ es.addEventListener('book',(e)=>{
 es.addEventListener('symbolChanged',(e)=>{
   var d=JSON.parse(e.data);
   document.getElementById('symLabel').textContent=d.symbol;
-  document.title=d.symbol+' Live';
+  document.title=d.symbol+' SIM';
   candles=[];bookData=null;lastQuote=null;tradeCount=0;
   document.getElementById('lp').textContent='\\u2014';
   document.getElementById('lp').className='px flat';
@@ -935,7 +1129,6 @@ es.addEventListener('symbolChanged',(e)=>{
   vp.scrollOffset=0;vp.atLiveEdge=true;
   vp.priceAutoFit=true;vp.priceMin=null;vp.priceMax=null;
   if(typeof noMoreHistory!=='undefined')noMoreHistory=false;
-  // Sync timeframe buttons if interval included
   if(d.interval){
     var btns=document.querySelectorAll('.tf');
     for(var i=0;i<btns.length;i++){
@@ -1042,7 +1235,7 @@ searchInput.addEventListener('input',function(){
         });
       })
       .catch(function(){searchResults.innerHTML='<div class="search-empty">Search error</div>'});
-  },200);
+  },100);
 });
 
 function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML}
@@ -1078,30 +1271,6 @@ es.addEventListener('intervalChanged',function(e){
   }
 });
 
-// --- Infinite scroll ---
-var loadingMore=false;
-var noMoreHistory=false;
-var origDraw=draw;
-draw=function(){
-  origDraw();
-  // Trigger history load when near left edge
-  if(candles.length>0&&!loadingMore&&!noMoreHistory){
-    var range=getVisibleRange();
-    if(range.startIndex<=2){
-      loadingMore=true;
-      var prevLen=candles.length;
-      fetch('/historicals')
-        .then(function(r){return r.json()})
-        .then(function(d){
-          if(d.candles){candles=d.candles}
-          if(candles.length<=prevLen)noMoreHistory=true;
-          loadingMore=false;
-        })
-        .catch(function(){loadingMore=false});
-    }
-  }
-};
-
 function frame(){draw();requestAnimationFrame(frame)}
 requestAnimationFrame(frame);
 </script></body></html>`;
@@ -1120,7 +1289,6 @@ const server = Bun.serve({
       const stream = new ReadableStream({
         start(controller) {
           sseClients.add(controller);
-          // Send current symbol + interval
           controller.enqueue(
             new TextEncoder().encode(
               `event: symbolChanged\ndata: ${JSON.stringify({ symbol: currentSymbol, interval: currentInterval })}\n\n`,
@@ -1154,55 +1322,31 @@ const server = Bun.serve({
       });
     }
     if (url.pathname === "/search") {
-      const q = url.searchParams.get("q")?.trim();
+      const q = url.searchParams.get("q")?.trim().toUpperCase();
       if (!q) return Response.json({ results: [] });
-      try {
-        const instruments = await client.findInstruments(q);
-        const results = instruments.slice(0, 12).map((i) => ({
-          symbol: i.symbol,
-          name: i.simple_name || i.name,
-          type: i.type,
-        }));
-        return Response.json({ results });
-      } catch (err) {
-        console.error("Search error:", err);
-        return Response.json({ results: [], error: "Search failed" }, { status: 500 });
-      }
+      const results = SIM_SYMBOLS.filter(
+        (s) => s.symbol.includes(q) || s.name.toUpperCase().includes(q),
+      ).slice(0, 12);
+      return Response.json({ results });
     }
     if (url.pathname === "/switch") {
       const sym = url.searchParams.get("symbol")?.trim().toUpperCase();
       if (!sym) return Response.json({ error: "Missing symbol" }, { status: 400 });
-      try {
-        await switchSymbol(sym);
-        return Response.json({ symbol: currentSymbol, ok: true });
-      } catch (err) {
-        console.error("Switch error:", err);
-        return Response.json({ error: "Switch failed" }, { status: 500 });
-      }
+      currentSymbol = sym;
+      engine.restart(sym, currentInterval);
+      broadcast("symbolChanged", { symbol: currentSymbol, interval: currentInterval });
+      return Response.json({ symbol: currentSymbol, ok: true });
     }
     if (url.pathname === "/interval") {
       const tf = url.searchParams.get("tf")?.trim();
-      if (!tf || !TF_TO_REST[tf])
+      if (!tf || !TF_TO_STEP[tf])
         return Response.json({ error: "Invalid timeframe" }, { status: 400 });
-      try {
-        await switchInterval(tf);
-        return Response.json({ interval: currentInterval, ok: true });
-      } catch (err) {
-        console.error("Interval switch error:", err);
-        return Response.json({ error: "Interval switch failed" }, { status: 500 });
-      }
+      currentInterval = tf;
+      engine.restart(currentSymbol, tf);
+      broadcast("intervalChanged", { interval: currentInterval });
+      return Response.json({ interval: currentInterval, ok: true });
     }
-    if (url.pathname === "/historicals") {
-      // Fetch broader history and merge into state
-      try {
-        await loadHistory(currentSymbol);
-        return Response.json({ candles: state.candles });
-      } catch (err) {
-        console.error("Historicals error:", err);
-        return Response.json({ candles: state.candles });
-      }
-    }
-    if (url.pathname === "/history") {
+    if (url.pathname === "/historicals" || url.pathname === "/history") {
       return Response.json({ candles: state.candles });
     }
     if (url.pathname === "/" || url.pathname === "/index.html") {
@@ -1212,5 +1356,6 @@ const server = Bun.serve({
   },
 });
 
-console.log(`\n  Stream viewer: http://127.0.0.1:${server.port}\n`);
-console.log("Waiting for market data...");
+console.log(`\n  Stream viewer (SIM): http://127.0.0.1:${server.port}`);
+console.log(`  Symbol: ${currentSymbol}  Speed: ${speed}x\n`);
+console.log("Generating simulated market data...");

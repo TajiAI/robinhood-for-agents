@@ -23,7 +23,7 @@ Comprehensive reference for all Robinhood API endpoints, streaming protocols, an
 7. [Crypto Trading](#7-crypto-trading)
 8. [Historical Data](#8-historical-data)
 9. [Markets & Discovery](#9-markets--discovery)
-10. [News, Ratings, Earnings](#10-news-ratings-earnings)
+10. [News, Ratings, Earnings & Research Reports](#10-news-ratings-earnings)
 11. [Instruments & Fundamentals](#11-instruments--fundamentals)
 12. [Undocumented / HAR-Only Endpoints](#12-undocumented--har-only-endpoints)
 
@@ -1762,6 +1762,201 @@ Returns index instruments (SPX, NDX, VIX, RUT, XSP, DJX, etc.) with `tradable_ch
 | `ratings[].type` | string | `"buy"`, `"hold"`, `"sell"` |
 | `ratings[].text` | string | Analyst commentary |
 | `instrument_id` | string | Instrument UUID |
+
+### Morningstar Research Report (Ratings Overview)
+
+| | |
+|---|---|
+| **Endpoint** | `GET /discovery/ratings/{instrumentId}/overview/` |
+| **URL** | `https://api.robinhood.com/discovery/ratings/{instrumentId}/overview/` |
+| **Auth** | Bearer token (requires Robinhood Gold subscription for full data) |
+| **Client method** | Not yet implemented in `RobinhoodClient` |
+| **Used by** | `bin/fetch-research-reports.ts` |
+
+Returns the Morningstar equity research report metadata and a pre-signed S3 URL to download the full PDF report. This is the key endpoint behind the "Research report" section on each stock page in the Robinhood web UI.
+
+**Path parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `instrumentId` | string (UUID) | Robinhood instrument UUID (e.g., `f90de184-4f73-4aad-9a5f-407858013eb1` for PLTR) |
+
+**Response fields (`RatingsOverview`):**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `download_url` | string\|null | Pre-signed S3 URL to the Morningstar PDF report. Format: `https://robinhood-midlands.s3.amazonaws.com/analyst_report_pdf/{uuid}?...`. URLs expire (see `Expires` query param). **Null if no report available.** |
+| `report_title` | string | Full report title (e.g., "Apple's Fortressed Software Ecosystem Drives Strong Unit Sales Growth and Profitability") |
+| `report_published_at` | string | ISO 8601 date of initial publication |
+| `report_updated_at` | string | ISO 8601 date of latest update |
+| `source` | string | Report source (always `"morningstar"` currently) |
+| `star_rating` | string | Morningstar star rating (`"1"` through `"5"`) — valuation vs fair value |
+| `fair_value` | object | `{ "amount": "260.0000", "currency_code": "USD" }` — Morningstar's estimated fair value |
+| `economic_moat` | string | Competitive advantage durability: `"wide"`, `"narrow"`, or `"none"` |
+| `uncertainty` | string | Fair value estimate uncertainty: `"low"`, `"medium"`, `"high"`, `"very_high"` |
+| `stewardship` | string | Management quality assessment: `"exemplary"`, `"standard"`, `"poor"` |
+
+**Example response:**
+
+```json
+{
+  "download_url": "https://robinhood-midlands.s3.amazonaws.com/analyst_report_pdf/e8ab56e7-...?AWSAccessKeyId=...&Signature=...&Expires=1774568268",
+  "report_title": "Palantir Is America's Artificial Intelligence Operating System...",
+  "report_published_at": "2025-11-15T00:00:00Z",
+  "report_updated_at": "2026-02-02T00:00:00Z",
+  "source": "morningstar",
+  "star_rating": "3",
+  "fair_value": { "amount": "153.0000", "currency_code": "USD" },
+  "economic_moat": "narrow",
+  "uncertainty": "very_high",
+  "stewardship": "standard"
+}
+```
+
+**Notes:**
+- Returns `404` if no Morningstar report exists for the instrument (most small/micro-cap stocks)
+- The `download_url` is a pre-signed AWS S3 URL that expires — download immediately after fetching
+- Coverage: ~790 stocks out of ~4,000 with market cap > $50M (roughly the S&P 500 + mid-cap universe)
+- The same endpoint likely powers the "Research report" card on `robinhood.com/stocks/{SYMBOL}` pages
+- Requires authentication — unauthenticated requests return `401`
+
+### Hedge Fund Trading Trends — Summary
+
+| | |
+|---|---|
+| **Endpoint** | `GET /marketdata/hedgefunds/summary/{instrumentId}/` |
+| **URL** | `https://api.robinhood.com/marketdata/hedgefunds/summary/{instrumentId}/` |
+| **Auth** | Bearer token |
+| **Used by** | `bin/fetch-research-reports.ts` |
+
+Returns quarterly aggregate hedge fund buying/selling activity for a stock.
+
+**Response fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `instrument_id` | string | Instrument UUID |
+| `sentiment_score` | string | Overall sentiment: `"Positive Sentiment"`, `"Negative Sentiment"`, `"NA"` |
+| `quarterly_aggregate_transactions` | array | Quarterly data points (8 quarters typically) |
+| `quarterly_aggregate_transactions[].date` | string | Quarter end date (e.g., `"2025-12-31"`) |
+| `quarterly_aggregate_transactions[].total_shares_held` | number | Total shares held by tracked hedge funds |
+| `quarterly_aggregate_transactions[].shares_bought` | number | Shares bought during the quarter |
+| `quarterly_aggregate_transactions[].shares_sold` | number | Shares sold during the quarter |
+
+### Hedge Fund Trading Trends — Transactions
+
+| | |
+|---|---|
+| **Endpoint** | `GET /marketdata/hedgefunds/transactions/{instrumentId}/` |
+| **URL** | `https://api.robinhood.com/marketdata/hedgefunds/transactions/{instrumentId}/` |
+| **Auth** | Bearer token |
+| **Used by** | `bin/fetch-research-reports.ts` |
+
+Returns per-fund breakdown of recent hedge fund trades. Typically 15-20 entries, sorted by market value descending.
+
+**Response fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `instrument_id` | string | Instrument UUID |
+| `detailed_transactions` | array | Per-fund trade details |
+| `detailed_transactions[].manager_name` | string | Fund manager name (e.g., `"Warren Buffett"`, `"Cathie Wood"`) |
+| `detailed_transactions[].institution_name` | string | Institution name (e.g., `"Berkshire Hathaway Inc"`) |
+| `detailed_transactions[].portfolio_percentage` | number | % of fund's portfolio this position represents |
+| `detailed_transactions[].change_percentage` | number | % change in position size |
+| `detailed_transactions[].action` | string | `"Added"`, `"Reduced"`, `"Opened Position"`, `"Closed Position"`, `"No Change"` |
+| `detailed_transactions[].market_value` | number | Current market value of the position (USD) |
+| `detailed_transactions[].total_shares` | number | Total shares currently held |
+| `detailed_transactions[].shares_traded` | number | Shares bought (positive) or sold (negative) |
+
+### Insider Trading Trends — Summary
+
+| | |
+|---|---|
+| **Endpoint** | `GET /marketdata/insiders/summary/{instrumentId}/` |
+| **URL** | `https://api.robinhood.com/marketdata/insiders/summary/{instrumentId}/` |
+| **Auth** | Bearer token |
+| **Used by** | `bin/fetch-research-reports.ts` |
+
+Returns monthly aggregate insider buying/selling activity. Typically 12 months of data.
+
+**Response fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `instrument_id` | string | Instrument UUID |
+| `sentiment_score` | string | `"Positive Sentiment"`, `"Negative Sentiment"`, `"NA"` |
+| `monthly_aggregate_transactions` | array | Monthly data points |
+| `monthly_aggregate_transactions[].date` | string | Month start date (e.g., `"2026-03-01"`) |
+| `monthly_aggregate_transactions[].shares_bought` | number | Total shares bought by insiders |
+| `monthly_aggregate_transactions[].shares_sold` | number | Total shares sold by insiders |
+| `monthly_aggregate_transactions[].buy_transactions` | number | Number of buy transactions |
+| `monthly_aggregate_transactions[].sell_transactions` | number | Number of sell transactions |
+
+### Insider Trading Trends — Transactions
+
+| | |
+|---|---|
+| **Endpoint** | `GET /marketdata/insiders/transactions/{instrumentId}/` |
+| **URL** | `https://api.robinhood.com/marketdata/insiders/transactions/{instrumentId}/` |
+| **Auth** | Bearer token |
+| **Used by** | `bin/fetch-research-reports.ts` |
+
+Returns per-insider breakdown of recent trades. Typically 15-20 entries, sorted by date descending.
+
+**Response fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `instrument_id` | string | Instrument UUID |
+| `detailed_transactions` | array | Per-insider trade details |
+| `detailed_transactions[].name` | string | Insider name (e.g., `"Timothy Cook"`, `"Peter Thiel"`) |
+| `detailed_transactions[].position` | string | Title (e.g., `"CEO, Director"`, `"SVP & CFO"`) |
+| `detailed_transactions[].description` | string | Transaction code: `"S"` (discretionary sell), `"AS"` (auto sell), `"NB"` (non-discretionary buy), `"NS"` (non-discretionary sell), `"OS"` (option-related sell) |
+| `detailed_transactions[].transaction_type` | string | `"Discretionary Sell"`, `"Uninformative Buy"`, `"Uninformative Sell"` |
+| `detailed_transactions[].amount` | number | Dollar value of the transaction |
+| `detailed_transactions[].number_of_shares` | number | Shares transacted |
+| `detailed_transactions[].date` | string | Transaction date (YYYY-MM-DD) |
+
+### Short Interest
+
+| | |
+|---|---|
+| **Endpoint** | `GET /marketdata/fundamentals/short/v1/` |
+| **URL** | `https://api.robinhood.com/marketdata/fundamentals/short/v1/?ids={instrumentId}&start_date={YYYY-MM-DD}` |
+| **Auth** | Bearer token |
+| **Used by** | `bin/fetch-research-reports.ts` |
+
+Returns historical short interest data. **Maximum 92-day window** — the `start_date` must be within 92 days of the current date or the API returns `400`.
+
+**Query parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `ids` | string | Instrument UUID |
+| `start_date` | string | Start date (YYYY-MM-DD), max 92 days ago |
+
+### Robinhood User Trading Summary
+
+| | |
+|---|---|
+| **Endpoint** | `GET /marketdata/equities/summary/robinhood/{instrumentId}/` |
+| **URL** | `https://api.robinhood.com/marketdata/equities/summary/robinhood/{instrumentId}/` |
+| **Auth** | Bearer token |
+
+Returns daily Robinhood user buy/sell activity (the "Robinhood" tab under Trading Trends). Typically ~22 trading days of data.
+
+**Response fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `instrument_id` | string | Instrument UUID |
+| `daily_transactions` | array | Daily data points |
+| `daily_transactions[].date` | string | Trading date (YYYY-MM-DD) |
+| `daily_transactions[].net_buy_percentage` | number | Net buy % (negative = net sell) |
+| `daily_transactions[].net_sell_percentage` | number | Net sell % (negative = net buy) |
+| `daily_transactions[].buy_volume_percentage_change` | number\|null | Buy volume % change vs prior day |
+| `daily_transactions[].sell_volume_percentage_change` | number\|null | Sell volume % change vs prior day |
 
 ### Earnings
 
