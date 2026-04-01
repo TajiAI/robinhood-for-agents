@@ -1,12 +1,23 @@
 /**
  * URL builders for Robinhood API endpoints.
- * All functions are pure — no state, no side effects.
+ *
+ * API_BASE and NUMMUS_BASE are constants — the client talks directly
+ * to Robinhood with Bearer auth injected by the session layer.
  */
 
 export const API_BASE = "https://api.robinhood.com";
 export const NUMMUS_BASE = "https://nummus.robinhood.com";
 
-const SAFE_PATH_SEGMENT = /^[a-zA-Z0-9_.:@-]+$/;
+/** Trusted origins for redirect safety. */
+export function trustedOrigins(): Set<string> {
+  return new Set([
+    new URL(API_BASE).origin,
+    new URL(NUMMUS_BASE).origin,
+    new URL("https://robinhood.com").origin,
+  ]);
+}
+
+const SAFE_PATH_SEGMENT = /^[a-zA-Z0-9_.-]+$/;
 
 /** Reject path segments that could cause path traversal or injection. */
 function safeSegment(value: string, label: string): string {
