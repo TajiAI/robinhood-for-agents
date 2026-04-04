@@ -93,7 +93,7 @@ const dxClient = new DxLinkClient();
 dxClient.on("close", () => console.error("WebSocket closed"));
 dxClient.on("error", (e) => console.error("WebSocket error:", e.message));
 
-const accessToken = client._session.getAuthTokenForRevocation();
+const accessToken = client._session.getAccessToken();
 await dxClient.connect(tokenData.wss_url, tokenData.token, {
   headers: { Authorization: `Bearer ${accessToken}`, Origin: "https://robinhood.com" },
 });

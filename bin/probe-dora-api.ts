@@ -5,17 +5,12 @@
  */
 
 import { chromium } from "playwright-core";
-import { resolveBrowserExecutable } from "../src/server/browser-auth.js";
 
 const LOGIN_URL = "https://robinhood.com/login";
 const PLTR_INSTRUMENT_ID = "f90de184-4f73-4aad-9a5f-407858013eb1";
 
 async function main() {
-	const executablePath = resolveBrowserExecutable();
-	const browser = await chromium.launch({
-		headless: false,
-		...(executablePath ? { executablePath } : { channel: "chrome" as const }),
-	});
+	const browser = await chromium.launch({ headless: false, channel: "chrome" });
 
 	const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
 	const page = await context.newPage();

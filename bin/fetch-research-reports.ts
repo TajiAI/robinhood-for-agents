@@ -21,7 +21,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type Browser, chromium } from "playwright-core";
-import { resolveBrowserExecutable } from "../src/server/browser-auth.js";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -435,7 +434,7 @@ async function fetchAllData(
 async function main() {
   const args = process.argv.slice(2);
   const chromeIdx = args.indexOf("--chrome");
-  const executablePath = chromeIdx !== -1 ? args[chromeIdx + 1] : resolveBrowserExecutable();
+  const executablePath = chromeIdx !== -1 ? args[chromeIdx + 1] : undefined;
 
   ensureDir(OUTPUT_DIR);
 

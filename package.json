@@ -1,5 +1,5 @@
 {
-  "name": "@tajiai/robinhood-for-agents",
+  "name": "robinhood-for-agents",
   "version": "0.8.0",
   "type": "module",
   "description": "AI-native Robinhood trading interface — MCP server + TypeScript client",
@@ -63,6 +63,7 @@
     "zod": "^4.3.6"
   },
   "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
+    "registry": "https://npm.pkg.github.com",
+    "access": "restricted"
   }
 }

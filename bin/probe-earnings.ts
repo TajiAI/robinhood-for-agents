@@ -4,18 +4,13 @@
  */
 
 import { chromium } from "playwright-core";
-import { resolveBrowserExecutable } from "../src/server/browser-auth.js";
 
 const LOGIN_URL = "https://robinhood.com/login";
 const PLTR_ID = "f90de184-4f73-4aad-9a5f-407858013eb1";
 const AAPL_ID = "450dfc6d-5510-4d40-abfb-f633b7d9be3e";
 
 async function main() {
-	const executablePath = resolveBrowserExecutable();
-	const browser = await chromium.launch({
-		headless: false,
-		...(executablePath ? { executablePath } : { channel: "chrome" as const }),
-	});
+	const browser = await chromium.launch({ headless: false, channel: "chrome" });
 
 	const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
 	const page = await context.newPage();
@@ -48,10 +43,10 @@ async function main() {
 	await browser.close().catch(() => {});
 
 	const headers: Record<string, string> = {
-		authorization: (capturedHeaders as Record<string, string>).authorization || "",
+		authorization: (capturedHeaders as unknown as Record<string, string>).authorization || "",
 		accept: "application/json",
 		cookie: cookieStr,
-		"user-agent": (capturedHeaders as Record<string, string>)["user-agent"] || "",
+		"user-agent": (capturedHeaders as unknown as Record<string, string>)["user-agent"] || "",
 		origin: "https://robinhood.com",
 		referer: "https://robinhood.com/",
 	};

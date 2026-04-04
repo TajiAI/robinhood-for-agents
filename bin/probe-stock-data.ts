@@ -5,7 +5,6 @@
  */
 
 import { chromium } from "playwright-core";
-import { resolveBrowserExecutable } from "../src/server/browser-auth.js";
 
 const LOGIN_URL = "https://robinhood.com/login";
 
@@ -15,11 +14,7 @@ const INSTRUMENTS = [
 ];
 
 async function main() {
-	const executablePath = resolveBrowserExecutable();
-	const browser = await chromium.launch({
-		headless: false,
-		...(executablePath ? { executablePath } : { channel: "chrome" as const }),
-	});
+	const browser = await chromium.launch({ headless: false, channel: "chrome" });
 
 	const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
 	const page = await context.newPage();

@@ -397,15 +397,12 @@ class ReplayEngine {
   }
 
   private generateTrade() {
-    const { range } = priceForSymbol(this.symbol);
+    const { range, base } = priceForSymbol(this.symbol);
     const jitter = (Math.random() - 0.5) * range * 0.05;
     const price = +(this.lastPrice + jitter).toFixed(2);
-    const prevPrice = this.lastPrice;
-    this.lastPrice = price;
 
     const size = Math.round(10 + Math.random() * 490);
-    const direction = price >= prevPrice ? "UPTICK" : "DOWNTICK";
-    const { base } = priceForSymbol(this.symbol);
+    const direction = price >= this.lastPrice ? "UPTICK" : "DOWNTICK";
     const change = +(price - base).toFixed(2);
 
     tradeCb([

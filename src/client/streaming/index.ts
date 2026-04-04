@@ -59,7 +59,7 @@ export class StreamingManager {
 
   /** Build WebSocket upgrade headers (Authorization + Origin). */
   private upgradeHeaders(): Record<string, string> {
-    const token = this.session.getAuthTokenForRevocation();
+    const token = this.session.getAccessToken();
     const headers: Record<string, string> = { Origin: "https://robinhood.com" };
     if (token) headers.Authorization = `Bearer ${token}`;
     return headers;

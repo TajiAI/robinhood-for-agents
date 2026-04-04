@@ -70,6 +70,11 @@ export class RobinhoodSession {
     this.accessToken = null;
   }
 
+  /** Return the current access token (for WebSocket auth headers). */
+  getAccessToken(): string | null {
+    return this.accessToken;
+  }
+
   /** Build headers with Authorization injected if token is set. */
   private authHeaders(base: Record<string, string>): Record<string, string> {
     if (this.accessToken) {
